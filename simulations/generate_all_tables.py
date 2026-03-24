@@ -1441,7 +1441,42 @@ def insert_to_sqlserver(data_dict):
              OilFilterDifferentialPressureBar)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        # Add more INSERT queries for other tables...
+        'PumpTelemetry': """
+            INSERT INTO PumpTelemetry
+            (Timestamp, PumpID, RunningStatus, VFDSpeedPercent, PowerConsumptionKW,
+             FlowRateLPM, DifferentialPressureBar, MotorCurrentAmps, VibrationMmS)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        'PumpOperatingData': """
+            INSERT INTO PumpOperatingData
+            (Timestamp, PumpID, PumpType, RunningStatus, VFDSpeedPercent, VFDSpeedHz,
+             FlowRateLPS, FlowRateLPM, DischargePressureBar, SuctionPressureBar,
+             DifferentialPressureBar, DifferentialPressureSetpointBar, PowerConsumptionKW,
+             MotorCurrentAmps, MotorVoltageVolts, PowerFactor, PumpEfficiencyPercent,
+             MotorEfficiencyPercent, WireToWaterEfficiencyPercent,
+             BearingTempFrontC, BearingTempRearC, VibrationMmS)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        'CoolingTowerTelemetry': """
+            INSERT INTO CoolingTowerTelemetry
+            (Timestamp, TowerID, Fan1Status, Fan1VFDSpeedPercent, Fan2Status,
+             Fan2VFDSpeedPercent, TotalFanPowerKW, BasinTempCelsius, InletTempCelsius,
+             ApproachTempCelsius, WaterFlowRateLPM, MakeupWaterFlowLPM, BasinLevelPercent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        'CoolingTowerOperatingData': """
+            INSERT INTO CoolingTowerOperatingData
+            (Timestamp, TowerID, WaterFlowRateLPS, WaterFlowRateLPM, WaterFlowRateGPM,
+             EnteringWaterTempC, LeavingWaterTempC, WetBulbAirTempC, DryBulbAirTempC,
+             RelativeHumidityPercent, EffectivenessPercent, CoolingCapacityTons,
+             Fan1Status, Fan1SpeedPercent, Fan1SpeedRPM, Fan1PowerKW,
+             Fan2Status, Fan2SpeedPercent, Fan2SpeedRPM, Fan2PowerKW,
+             TotalFanPowerKW, AirFlowCFM, AirFlowM3H, AirVelocityMPS,
+             MakeupWaterFlowLPM, BlowdownFlowLPM, CyclesOfConcentration,
+             BasinWaterLevelPercent, BasinWaterTempC, WaterLoadingGPMPerSqFt,
+             HeatRejectionRateKW, PowerPerTonKW)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
         'WeatherConditions': """
             INSERT INTO WeatherConditions
             (Timestamp, OutdoorTempCelsius, WetBulbTempCelsius, RelativeHumidityPercent,
@@ -1504,7 +1539,7 @@ def insert_to_sqlserver(data_dict):
             for i in tqdm(range(0, len(df), batch_size), total=total_batches, desc=f"  {table_name}"):
                 batch = df.iloc[i:i+batch_size]
                 
-                batch_data = [tuple(row) for _, row in batch.iterrows()]
+                batch_data = [tuple(None if pd.isna(v) else v for v in row) for _, row in batch.iterrows()]
                 cursor.executemany(insert_sql, batch_data)
                 conn.commit()
             
