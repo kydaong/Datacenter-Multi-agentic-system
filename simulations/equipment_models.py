@@ -48,7 +48,8 @@ class ChillerEfficiencyModel:
         Get chiller efficiency (kW/RT) based on load and temperatures
         
         Args:
-            load_tons: Actual cooling load in tons
+            load_tons: Actual cooling load in refrigeration tons 
+        
             chw_supply_temp_c: CHW supply temperature in °C
             cw_entering_temp_c: Condenser water entering temp (optional penalty)
         
