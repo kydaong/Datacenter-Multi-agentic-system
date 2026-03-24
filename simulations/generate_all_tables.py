@@ -1384,7 +1384,7 @@ def insert_to_sqlserver(data_dict):
     print("SQL SERVER DATABASE INSERTION")
     print("="*70)
     
-    
+
     # Connection string
     conn_str = (
         f"DRIVER={{{os.getenv('DB_DRIVER', 'ODBC Driver 17 for SQL Server')}}};"
