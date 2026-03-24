@@ -1,0 +1,140 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+*.spec
+
+# -----------------------------
+# Virtual Environments
+# -----------------------------
+.env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# -----------------------------
+# Package & Dependency Tools
+# -----------------------------
+pip-wheel-metadata/
+pip-log.txt
+poetry.lock
+poetry.toml
+
+# -----------------------------
+# Jupyter
+# -----------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -----------------------------
+# Logs & Temp Files
+# -----------------------------
+*.log
+*.tmp
+*.temp
+logs/
+cache/
+.DS_Store
+
+# -----------------------------
+# Environment & Secrets
+# -----------------------------
+*.env
+*.env.*
+.env.local
+secrets.json
+config.yaml
+credentials.json
+
+# -----------------------------
+# FastAPI / Uvicorn
+# -----------------------------
+*.db
+*.sqlite
+__uvicorn__
+uvicorn.log
+
+# -----------------------------
+# ML / AI Artifacts
+# -----------------------------
+# PyTorch
+*.pt
+*.pth
+*.bin
+
+# HuggingFace & Transformers
+huggingface/
+hf_cache/
+transformers_cache/
+
+# SentenceTransformers
+sentence_transformers/
+st_cache/
+
+# LangChain
+langchain.db
+.lc_cache/
+.vectorstore/
+
+# Qdrant (local storage)
+qdrant/
+qdrant_storage/
+qdrant_data/
+
+# -----------------------------
+# Document Processing Leftovers
+# -----------------------------
+*.pdf.txt
+*.pdf.out
+*__extracted/
+extracted_pages/
+output_docs/
+temp_docs/
+
+# Unstructured
+unstructured_data/
+unstructured_output/
+
+# -----------------------------
+# Data files (optional)
+# -----------------------------
+data/
+datasets/
+*.csv
+*.parquet
+*.xlsx
+
+# -----------------------------
+# IDE / Editor
+# -----------------------------
+# VSCode
+.vscode/
+.code-workspace
+
+# PyCharm
+.idea/
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+desktop.ini
+
+*.csv
+*.pdf
+
