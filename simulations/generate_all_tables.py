@@ -21,8 +21,8 @@ load_dotenv()
 # CONFIGURATION
 # ============================================
 
-START_DATE = "2025-10-01 00:00:00"
-END_DATE = "2025-10-07 23:59:00"
+START_DATE = "2026-03-19 00:00:00"
+END_DATE = "2026-03-25 23:59:00"
 INTERVAL_MINUTES = 1
 
 # Equipment specs
@@ -168,18 +168,39 @@ def generate_chiller_operating_points():
             chiller_spec = CHILLERS[chiller_id]
             cooling_load_per_chiller = cooling_load_kw * (chiller_spec['rated_tons'] / total_rated_tons)
             cooling_load_tons = cooling_load_per_chiller / 3.517
-            
+
             # Efficiency model
             chiller_model = ChillerEfficiencyModel(chiller_id, chiller_spec['rated_tons'])
-            
+
+            # ---- ANOMALY INJECTION ----
+            # Mar 21: Chiller-1 condenser fouling → high CW temp, poor efficiency
+            fouling_day = (ts.date() == pd.Timestamp("2026-03-21").date() and chiller_id == 'Chiller-1')
+            # Mar 23-24: Chiller-2 overloading → load pushed to 95-98%
+            overload_day = (ts.date() in [pd.Timestamp("2026-03-23").date(), pd.Timestamp("2026-03-24").date()] and chiller_id == 'Chiller-2')
+            # Mar 25 (today): All chillers degraded efficiency (e.g. refrigerant leak / sensor drift)
+            degraded_today = (ts.date() == pd.Timestamp("2026-03-25").date())
+
             chw_supply_temp = 6.7 + np.random.normal(0, 0.1)
+            if degraded_today:
+                chw_supply_temp = 8.5 + np.random.normal(0, 0.2)  # CHW setpoint drift up
             chw_return_temp = 12.1 + np.random.normal(0, 0.15)
             chw_delta_t = chw_return_temp - chw_supply_temp
-            
+
             tower_approach = 3.5 + np.random.normal(0, 0.3)
+            if fouling_day:
+                tower_approach = 6.5 + np.random.normal(0, 0.3)   # Tower fouling → high approach
             cw_supply_temp = wet_bulb_temp + tower_approach
-            
+
+            if overload_day:
+                cooling_load_tons = min(cooling_load_tons * 1.18, chiller_spec['rated_tons'] * 0.98)
+
             kw_per_ton = chiller_model.get_efficiency(cooling_load_tons, chw_supply_temp, cw_supply_temp)
+            if fouling_day:
+                kw_per_ton *= 1.20   # 20% efficiency penalty from fouling
+            if degraded_today:
+                kw_per_ton *= 1.12   # 12% penalty from refrigerant / sensor issues
+            kw_per_ton = min(kw_per_ton, 0.70)
+
             chiller_power_kw = cooling_load_tons * kw_per_ton
             
             cp_water = 4.18
