@@ -16,20 +16,21 @@ class ChillerEfficiencyModel:
         self.rated_tons = rated_tons
         
         # Manufacturer efficiency curves at different CHW temperatures
-        # Data extracted from the chart you provided
-        # X-axis: Chiller load (RT - Refrigeration Tons)
+        # X-axis: Chiller load as % of rated capacity (normalized to 7 points: 20%-120%)
         # Y-axis: Efficiency (kW/RT)
-        
+        # Scaled by rated_tons so the optimal efficiency point tracks chiller size
+        scale = rated_tons / 400.0
+        self.load_points_rt = np.array([200, 250, 300, 350, 400, 450, 500]) * scale
+
         # At 44°F (6.7°C) CHW - RED LINE
-        self.load_points_rt = np.array([200, 250, 300, 350, 400, 450, 500])
         self.efficiency_44F = np.array([0.620, 0.580, 0.560, 0.545, 0.535, 0.540, 0.545])
-        
+
         # At 45°F (7.2°C) CHW - MAGENTA LINE
         self.efficiency_45F = np.array([0.615, 0.575, 0.555, 0.540, 0.530, 0.525, 0.535])
-        
+
         # At 46°F (7.8°C) CHW - BLUE LINE
         self.efficiency_46F = np.array([0.610, 0.570, 0.550, 0.535, 0.525, 0.520, 0.530])
-        
+
         # At 47°F (8.3°C) CHW - PURPLE LINE
         self.efficiency_47F = np.array([0.605, 0.565, 0.545, 0.530, 0.520, 0.515, 0.525])
         
@@ -58,7 +59,7 @@ class ChillerEfficiencyModel:
         """
         
         # Ensure load is within reasonable bounds
-        load_tons = max(80, min(500, load_tons))  # 80-500 RT range
+        load_tons = max(self.rated_tons * 0.2, min(self.rated_tons * 1.25, load_tons))
         
         # Convert CHW temp to Fahrenheit for curve lookup
         chw_temp_f = (chw_supply_temp_c * 9/5) + 32

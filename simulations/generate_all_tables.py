@@ -27,9 +27,9 @@ INTERVAL_MINUTES = 1
 
 # Equipment specs
 CHILLERS = {
-    'Chiller-1': {'rated_tons': 400, 'rated_kw': 1406, 'type': 'large'},
-    'Chiller-2': {'rated_tons': 400, 'rated_kw': 1406, 'type': 'large'},
-    'Chiller-3': {'rated_tons': 300, 'rated_kw': 1055, 'type': 'small'}
+    'Chiller-1': {'rated_tons': 1000, 'rated_kw': 3517, 'type': 'large'},
+    'Chiller-2': {'rated_tons': 1000, 'rated_kw': 3517, 'type': 'large'},
+    'Chiller-3': {'rated_tons': 500,  'rated_kw': 1758, 'type': 'small'}
 }
 
 PUMPS = {
@@ -66,29 +66,29 @@ def get_cooling_load_for_time(timestamp):
     
     if day_of_week < 5:
         if 0 <= hour < 6:
-            base_cooling_kw = 2720
+            base_cooling_kw = 6250
         elif 6 <= hour < 9:
             progress = (hour - 6) + (minute / 60)
-            base_cooling_kw = 2720 + (160 * (progress / 3))
+            base_cooling_kw = 6250 + (370 * (progress / 3))
         elif 9 <= hour < 12:
-            base_cooling_kw = 2760 + np.random.uniform(0, 100)
+            base_cooling_kw = 6350 + np.random.uniform(0, 230)
         elif 12 <= hour < 14:
-            base_cooling_kw = 2780
+            base_cooling_kw = 6400
         elif 14 <= hour < 18:
-            base_cooling_kw = 2850
+            base_cooling_kw = 6550
         elif 18 <= hour < 22:
             progress = (hour - 18) + (minute / 60)
-            base_cooling_kw = 2850 - (120 * (progress / 4))
+            base_cooling_kw = 6550 - (275 * (progress / 4))
         else:
-            base_cooling_kw = 2730
+            base_cooling_kw = 6280
     else:
-        base_cooling_kw = 2600
-    
-    variation = np.random.normal(0, 20)
+        base_cooling_kw = 6000
+
+    variation = np.random.normal(0, 45)
     if minute % 15 == 0:
-        variation += np.random.uniform(0, 30)
-    
-    return max(2700, min(2900, base_cooling_kw + variation))
+        variation += np.random.uniform(0, 70)
+
+    return max(6200, min(6700, base_cooling_kw + variation))
 
 def get_weather_for_time(timestamp):
     """Singapore tropical weather"""
@@ -127,18 +127,16 @@ def determine_active_chillers(cooling_load_kw, wet_bulb_temp):
     """Determine which chillers to run"""
     cooling_load_tons = cooling_load_kw / 3.517
     
-    if cooling_load_tons < 350:
+    if cooling_load_tons < 900:
         active = ['Chiller-1']
-    elif cooling_load_tons < 700:
+    elif cooling_load_tons < 1800:
         active = ['Chiller-1', 'Chiller-2']
-    elif cooling_load_tons < 900:
-        active = ['Chiller-1', 'Chiller-2', 'Chiller-3']
     else:
         active = ['Chiller-1', 'Chiller-2', 'Chiller-3']
-    
+
     if wet_bulb_temp > 26 and len(active) < 3:
         load_per_chiller_tons = cooling_load_tons / len(active)
-        if load_per_chiller_tons > 380:
+        if load_per_chiller_tons > 950:
             if len(active) == 1:
                 active.append('Chiller-2')
             elif len(active) == 2:
@@ -164,11 +162,11 @@ def generate_chiller_operating_points():
         wet_bulb_temp = weather['wet_bulb']
         
         active_chillers = determine_active_chillers(cooling_load_kw, wet_bulb_temp)
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+
         for chiller_id in active_chillers:
             chiller_spec = CHILLERS[chiller_id]
+            cooling_load_per_chiller = cooling_load_kw * (chiller_spec['rated_tons'] / total_rated_tons)
             cooling_load_tons = cooling_load_per_chiller / 3.517
             
             # Efficiency model
@@ -245,13 +243,13 @@ def generate_chiller_telemetry():
         weather = get_weather_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, weather['wet_bulb'])
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+
         for chiller_id in active_chillers:
             chiller_spec = CHILLERS[chiller_id]
+            cooling_load_per_chiller = cooling_load_kw * (chiller_spec['rated_tons'] / total_rated_tons)
             cooling_load_tons = cooling_load_per_chiller / 3.517
-            
+
             chiller_model = ChillerEfficiencyModel(chiller_id, chiller_spec['rated_tons'])
             chw_supply_temp = 6.7 + np.random.normal(0, 0.1)
             kw_per_ton = chiller_model.get_efficiency(cooling_load_tons, chw_supply_temp)
@@ -312,12 +310,12 @@ def generate_chiller_performance_monitoring():
         weather = get_weather_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, weather['wet_bulb'])
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+
         for chiller_id in active_chillers:
             chiller_spec = CHILLERS[chiller_id]
             rated_tons = chiller_spec['rated_tons']
+            cooling_load_per_chiller = cooling_load_kw * (chiller_spec['rated_tons'] / total_rated_tons)
             cooling_load_tons = cooling_load_per_chiller / 3.517
             
             chiller_model = ChillerEfficiencyModel(chiller_id, rated_tons)
@@ -404,9 +402,10 @@ def generate_pump_telemetry():
         cooling_load_kw = get_cooling_load_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, 25)
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+        chiller_loads = {cid: cooling_load_kw * (CHILLERS[cid]['rated_tons'] / total_rated_tons) for cid in active_chillers}
+        cooling_load_per_chiller = cooling_load_kw / len(active_chillers)  # used for CHW pump sizing only
+
         # Total CHW flow needed
         total_chw_flow_lps = (cooling_load_kw / (4.18 * 5.4))
         
@@ -476,15 +475,14 @@ def generate_pump_telemetry():
             })
         
         # Condenser Water Pumps (one per active chiller)
-        cw_flow_per_chiller = (cooling_load_per_chiller / (4.18 * 5.4)) * 1.2
-        
         for idx, chiller_id in enumerate(active_chillers, 1):
             pump_id = f"CWP-{idx}"
             pump_spec = PUMPS[pump_id]
-            
+            cw_flow_per_chiller = (chiller_loads[chiller_id] / (4.18 * 5.4)) * 1.2
+
             vfd_speed = 65 + (cw_flow_per_chiller / pump_spec['rated_flow_lps']) * 35
             vfd_speed = min(100, max(60, vfd_speed))
-            
+
             power_kw = PumpAffinityLaws.calculate_power(pump_spec['rated_power_kw'], vfd_speed)
             flow_lpm = cw_flow_per_chiller * 60
             diff_pressure = 2.5 + (vfd_speed / 100) * 1.0
@@ -521,9 +519,9 @@ def generate_pump_operating_data():
         cooling_load_kw = get_cooling_load_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, 25)
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+        chiller_loads = {cid: cooling_load_kw * (CHILLERS[cid]['rated_tons'] / total_rated_tons) for cid in active_chillers}
+
         total_chw_flow_lps = (cooling_load_kw / (4.18 * 5.4))
         pchwp_flow_each = total_chw_flow_lps / 2
         
@@ -634,12 +632,11 @@ def generate_pump_operating_data():
             })
         
         # Condenser Water Pumps
-        cw_flow_per_chiller = (cooling_load_per_chiller / (4.18 * 5.4)) * 1.2
-        
         for idx, chiller_id in enumerate(active_chillers, 1):
             pump_id = f"CWP-{idx}"
             pump_spec = PUMPS[pump_id]
-            
+            cw_flow_per_chiller = (chiller_loads[chiller_id] / (4.18 * 5.4)) * 1.2
+
             vfd_speed = 65 + (cw_flow_per_chiller / pump_spec['rated_flow_lps']) * 35
             vfd_speed = min(100, max(60, vfd_speed))
             vfd_hz = 50 * (vfd_speed / 100)
@@ -692,13 +689,13 @@ def generate_cooling_tower_telemetry():
         weather = get_weather_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, weather['wet_bulb'])
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+
         # One tower per active chiller
         for idx, chiller_id in enumerate(active_chillers, 1):
             tower_id = f"CT-{idx}"
-            
+            cooling_load_per_chiller = cooling_load_kw * (CHILLERS[chiller_id]['rated_tons'] / total_rated_tons)
+
             # CW flow from chiller
             cw_flow_lps = (cooling_load_per_chiller / (4.18 * 5.4)) * 1.2
             cw_flow_lpm = cw_flow_lps * 60
@@ -758,13 +755,13 @@ def generate_cooling_tower_operating_data():
         weather = get_weather_for_time(ts)
         
         active_chillers = determine_active_chillers(cooling_load_kw, weather['wet_bulb'])
-        num_active = len(active_chillers)
-        cooling_load_per_chiller = cooling_load_kw / num_active
-        
+        total_rated_tons = sum(CHILLERS[cid]['rated_tons'] for cid in active_chillers)
+
         for idx, chiller_id in enumerate(active_chillers, 1):
             tower_id = f"CT-{idx}"
             tower_spec = TOWERS[tower_id]
-            
+            cooling_load_per_chiller = cooling_load_kw * (CHILLERS[chiller_id]['rated_tons'] / total_rated_tons)
+
             # Water flow
             cw_flow_lps = (cooling_load_per_chiller / (4.18 * 5.4)) * 1.2
             cw_flow_lpm = cw_flow_lps * 60
@@ -1198,6 +1195,9 @@ def generate_equipment_alarms():
             # Acknowledged time (1-10 min after trigger)
             ack_time = alarm_time + timedelta(minutes=np.random.randint(1, 10))
             
+            # Last day alarms stay ACTIVE, earlier ones are CLEARED
+            end_dt = datetime.strptime(END_DATE, "%Y-%m-%d %H:%M:%S")
+            is_active = alarm_time >= (end_dt - timedelta(hours=24))
             records.append({
                 'Timestamp': alarm_time,
                 'EquipmentID': equip_id,
@@ -1205,13 +1205,13 @@ def generate_equipment_alarms():
                 'AlarmCode': alarm_code,
                 'AlarmDescription': alarm_desc,
                 'AlarmSeverity': severity,
-                'AlarmStatus': 'CLEARED',
+                'AlarmStatus': 'ACTIVE' if is_active else 'CLEARED',
                 'TriggeredValue': triggered_val,
                 'ThresholdValue': threshold_val,
                 'Unit': unit,
-                'AcknowledgedBy': 'Operator' if np.random.random() > 0.3 else 'Auto-Ack',
-                'AcknowledgedTime': ack_time,
-                'ClearedTime': cleared_time
+                'AcknowledgedBy': None if is_active else ('Operator' if np.random.random() > 0.3 else 'Auto-Ack'),
+                'AcknowledgedTime': None if is_active else ack_time,
+                'ClearedTime': None if is_active else cleared_time
             })
             alarm_count += 1
     
