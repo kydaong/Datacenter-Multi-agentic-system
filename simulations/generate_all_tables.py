@@ -1242,6 +1242,179 @@ def generate_equipment_alarms():
     return df
 
 # ============================================
+# TABLE 15: EQUIPMENT REGISTRY (Static Metadata)
+# ============================================
+
+def generate_equipment_registry():
+    """Generate EquipmentRegistry table — static metadata for all equipment"""
+
+    print("\n[15/15] Generating EquipmentRegistry...")
+
+    records = []
+
+    # --- CHILLERS ---
+    chiller_specs = {
+        'Chiller-1': {
+            'Manufacturer': 'Carrier', 'ModelNumber': '19XR-8084', 'SerialNumber': 'CC-2018-0041',
+            'InstallDate': '2018-06-01', 'RatedCapacityTons': 1000, 'RatedPowerKW': 3517,
+            'RatedCOPFull': 6.28, 'RatedIPLV': 7.15, 'RefrigerantType': 'R-134a',
+            'DesignCHWSTCelsius': 6.5, 'DesignCHWRTCelsius': 12.0,
+            'DesignCWSTCelsius': 30.0, 'DesignCWRTCelsius': 35.0,
+            'ServiceIntervalHours': 2000, 'LastServiceDate': '2025-12-10',
+            'NextServiceDueDate': '2026-06-10', 'WarrantyExpiryDate': '2023-06-01',
+            'Location': 'Chiller Plant Room', 'Status': 'ACTIVE', 'HasVFD': 1,
+            'FanCount': None, 'FanPowerKWEach': None,
+            'RatedFlowLPS': None, 'RatedHeadM': None, 'PumpSubType': None,
+        },
+        'Chiller-2': {
+            'Manufacturer': 'Carrier', 'ModelNumber': '19XR-8084', 'SerialNumber': 'CC-2018-0042',
+            'InstallDate': '2018-06-01', 'RatedCapacityTons': 1000, 'RatedPowerKW': 3517,
+            'RatedCOPFull': 6.28, 'RatedIPLV': 7.15, 'RefrigerantType': 'R-134a',
+            'DesignCHWSTCelsius': 6.5, 'DesignCHWRTCelsius': 12.0,
+            'DesignCWSTCelsius': 30.0, 'DesignCWRTCelsius': 35.0,
+            'ServiceIntervalHours': 2000, 'LastServiceDate': '2025-12-10',
+            'NextServiceDueDate': '2026-06-10', 'WarrantyExpiryDate': '2023-06-01',
+            'Location': 'Chiller Plant Room', 'Status': 'ACTIVE', 'HasVFD': 1,
+            'FanCount': None, 'FanPowerKWEach': None,
+            'RatedFlowLPS': None, 'RatedHeadM': None, 'PumpSubType': None,
+        },
+        'Chiller-3': {
+            'Manufacturer': 'Trane', 'ModelNumber': 'CVHE500', 'SerialNumber': 'TR-2020-0087',
+            'InstallDate': '2020-03-15', 'RatedCapacityTons': 500, 'RatedPowerKW': 1758,
+            'RatedCOPFull': 6.45, 'RatedIPLV': 7.40, 'RefrigerantType': 'R-134a',
+            'DesignCHWSTCelsius': 6.5, 'DesignCHWRTCelsius': 12.0,
+            'DesignCWSTCelsius': 30.0, 'DesignCWRTCelsius': 35.0,
+            'ServiceIntervalHours': 2000, 'LastServiceDate': '2026-01-20',
+            'NextServiceDueDate': '2026-07-20', 'WarrantyExpiryDate': '2025-03-15',
+            'Location': 'Chiller Plant Room', 'Status': 'ACTIVE', 'HasVFD': 1,
+            'FanCount': None, 'FanPowerKWEach': None,
+            'RatedFlowLPS': None, 'RatedHeadM': None, 'PumpSubType': None,
+        },
+    }
+
+    for equip_id, spec in chiller_specs.items():
+        records.append({
+            'EquipmentID': equip_id,
+            'EquipmentType': 'CHILLER',
+            'PumpSubType': None,
+            'Manufacturer': spec['Manufacturer'],
+            'ModelNumber': spec['ModelNumber'],
+            'SerialNumber': spec['SerialNumber'],
+            'InstallDate': spec['InstallDate'],
+            'RatedCapacityTons': spec['RatedCapacityTons'],
+            'RatedPowerKW': spec['RatedPowerKW'],
+            'RatedFlowLPS': None,
+            'RatedHeadM': None,
+            'DesignCHWSTCelsius': spec['DesignCHWSTCelsius'],
+            'DesignCHWRTCelsius': spec['DesignCHWRTCelsius'],
+            'DesignCWSTCelsius': spec['DesignCWSTCelsius'],
+            'DesignCWRTCelsius': spec['DesignCWRTCelsius'],
+            'DesignApproachCelsius': None,
+            'RefrigerantType': spec['RefrigerantType'],
+            'RatedCOPFull': spec['RatedCOPFull'],
+            'RatedIPLV': spec['RatedIPLV'],
+            'HasVFD': spec['HasVFD'],
+            'FanCount': None,
+            'FanPowerKWEach': None,
+            'ServiceIntervalHours': spec['ServiceIntervalHours'],
+            'LastServiceDate': spec['LastServiceDate'],
+            'NextServiceDueDate': spec['NextServiceDueDate'],
+            'WarrantyExpiryDate': spec['WarrantyExpiryDate'],
+            'Location': spec['Location'],
+            'Status': spec['Status'],
+        })
+
+    # --- PUMPS ---
+    pump_details = {
+        'PCHWP-1': {'Manufacturer': 'Grundfos', 'ModelNumber': 'NK 150-250/247', 'SerialNumber': 'GF-2018-0101', 'InstallDate': '2018-06-01', 'SubType': 'PCHWP', 'RatedPowerKW': 55, 'RatedFlowLPS': 150, 'RatedHeadM': 28.0, 'Status': 'ACTIVE'},
+        'PCHWP-2': {'Manufacturer': 'Grundfos', 'ModelNumber': 'NK 150-250/247', 'SerialNumber': 'GF-2018-0102', 'InstallDate': '2018-06-01', 'SubType': 'PCHWP', 'RatedPowerKW': 55, 'RatedFlowLPS': 150, 'RatedHeadM': 28.0, 'Status': 'ACTIVE'},
+        'PCHWP-3': {'Manufacturer': 'Grundfos', 'ModelNumber': 'NK 150-250/247', 'SerialNumber': 'GF-2018-0103', 'InstallDate': '2018-06-01', 'SubType': 'PCHWP', 'RatedPowerKW': 55, 'RatedFlowLPS': 150, 'RatedHeadM': 28.0, 'Status': 'STANDBY'},
+        'SCHWP-1': {'Manufacturer': 'Armstrong', 'ModelNumber': '4300 Series 4x3x8', 'SerialNumber': 'AR-2018-0201', 'InstallDate': '2018-06-01', 'SubType': 'SCHWP', 'RatedPowerKW': 45, 'RatedFlowLPS': 120, 'RatedHeadM': 22.0, 'Status': 'ACTIVE'},
+        'SCHWP-2': {'Manufacturer': 'Armstrong', 'ModelNumber': '4300 Series 4x3x8', 'SerialNumber': 'AR-2018-0202', 'InstallDate': '2018-06-01', 'SubType': 'SCHWP', 'RatedPowerKW': 45, 'RatedFlowLPS': 120, 'RatedHeadM': 22.0, 'Status': 'ACTIVE'},
+        'SCHWP-3': {'Manufacturer': 'Armstrong', 'ModelNumber': '4300 Series 4x3x8', 'SerialNumber': 'AR-2018-0203', 'InstallDate': '2018-06-01', 'SubType': 'SCHWP', 'RatedPowerKW': 45, 'RatedFlowLPS': 120, 'RatedHeadM': 22.0, 'Status': 'STANDBY'},
+        'CWP-1':  {'Manufacturer': 'Wilo', 'ModelNumber': 'NL 200/315-37/4', 'SerialNumber': 'WL-2018-0301', 'InstallDate': '2018-06-01', 'SubType': 'CWP', 'RatedPowerKW': 38, 'RatedFlowLPS': 180, 'RatedHeadM': 18.5, 'Status': 'ACTIVE'},
+        'CWP-2':  {'Manufacturer': 'Wilo', 'ModelNumber': 'NL 200/315-37/4', 'SerialNumber': 'WL-2018-0302', 'InstallDate': '2018-06-01', 'SubType': 'CWP', 'RatedPowerKW': 38, 'RatedFlowLPS': 180, 'RatedHeadM': 18.5, 'Status': 'ACTIVE'},
+        'CWP-3':  {'Manufacturer': 'Wilo', 'ModelNumber': 'NL 200/315-37/4', 'SerialNumber': 'WL-2018-0303', 'InstallDate': '2018-06-01', 'SubType': 'CWP', 'RatedPowerKW': 38, 'RatedFlowLPS': 180, 'RatedHeadM': 18.5, 'Status': 'STANDBY'},
+    }
+
+    for equip_id, spec in pump_details.items():
+        records.append({
+            'EquipmentID': equip_id,
+            'EquipmentType': 'PUMP',
+            'PumpSubType': spec['SubType'],
+            'Manufacturer': spec['Manufacturer'],
+            'ModelNumber': spec['ModelNumber'],
+            'SerialNumber': spec['SerialNumber'],
+            'InstallDate': spec['InstallDate'],
+            'RatedCapacityTons': None,
+            'RatedPowerKW': spec['RatedPowerKW'],
+            'RatedFlowLPS': spec['RatedFlowLPS'],
+            'RatedHeadM': spec['RatedHeadM'],
+            'DesignCHWSTCelsius': None,
+            'DesignCHWRTCelsius': None,
+            'DesignCWSTCelsius': None,
+            'DesignCWRTCelsius': None,
+            'DesignApproachCelsius': None,
+            'RefrigerantType': '',
+            'RatedCOPFull': None,
+            'RatedIPLV': None,
+            'HasVFD': 1,
+            'FanCount': None,
+            'FanPowerKWEach': None,
+            'ServiceIntervalHours': 4000,
+            'LastServiceDate': '2025-11-01',
+            'NextServiceDueDate': '2026-11-01',
+            'WarrantyExpiryDate': '2023-06-01',
+            'Location': 'Chiller Plant Room',
+            'Status': spec['Status'],
+        })
+
+    # --- COOLING TOWERS ---
+    tower_details = {
+        'CT-1': {'Manufacturer': 'Evapco', 'ModelNumber': 'AT 360-54', 'SerialNumber': 'EV-2018-0401', 'InstallDate': '2018-06-01'},
+        'CT-2': {'Manufacturer': 'Evapco', 'ModelNumber': 'AT 360-54', 'SerialNumber': 'EV-2018-0402', 'InstallDate': '2018-06-01'},
+        'CT-3': {'Manufacturer': 'Evapco', 'ModelNumber': 'AT 360-54', 'SerialNumber': 'EV-2018-0403', 'InstallDate': '2018-06-01'},
+    }
+
+    for equip_id, spec in tower_details.items():
+        tower_spec = TOWERS[equip_id]
+        records.append({
+            'EquipmentID': equip_id,
+            'EquipmentType': 'COOLING_TOWER',
+            'PumpSubType': None,
+            'Manufacturer': spec['Manufacturer'],
+            'ModelNumber': spec['ModelNumber'],
+            'SerialNumber': spec['SerialNumber'],
+            'InstallDate': spec['InstallDate'],
+            'RatedCapacityTons': tower_spec['capacity_tons'],
+            'RatedPowerKW': tower_spec['fan_count'] * tower_spec['fan_power_kw_each'],
+            'RatedFlowLPS': None,
+            'RatedHeadM': None,
+            'DesignCHWSTCelsius': None,
+            'DesignCHWRTCelsius': None,
+            'DesignCWSTCelsius': 30.0,
+            'DesignCWRTCelsius': 35.0,
+            'DesignApproachCelsius': 3.5,
+            'RefrigerantType': '',
+            'RatedCOPFull': None,
+            'RatedIPLV': None,
+            'HasVFD': 1,
+            'FanCount': tower_spec['fan_count'],
+            'FanPowerKWEach': tower_spec['fan_power_kw_each'],
+            'ServiceIntervalHours': 2000,
+            'LastServiceDate': '2025-10-15',
+            'NextServiceDueDate': '2026-04-15',
+            'WarrantyExpiryDate': '2023-06-01',
+            'Location': 'Rooftop',
+            'Status': 'ACTIVE',
+        })
+
+    df = pd.DataFrame(records)
+    print(f"Generated {len(df)} equipment registry records ({len(chiller_specs)} chillers, {len(pump_details)} pumps, {len(tower_details)} towers)")
+    return df
+
+
+# ============================================
 # TABLE 13 & 14: AGENT TABLES (Empty - populated at runtime)
 # ============================================
 
@@ -1349,6 +1522,7 @@ def generate_all_data():
     data_dict['EquipmentAlarms'] = generate_equipment_alarms()
     data_dict['AgentPrompts'] = generate_agent_prompts()
     data_dict['AgentDecisions'] = generate_agent_decisions()
+    data_dict['EquipmentRegistry'] = generate_equipment_registry()
     
     print("\n" + "="*70)
     print("DATA GENERATION SUMMARY")
@@ -1537,6 +1711,16 @@ def insert_to_sqlserver(data_dict):
             INSERT INTO AgentPrompts
             (AgentName, Version, PromptText, PerformanceNotes, EvolvedFromVersion)
             VALUES (?, ?, ?, ?, ?)
+        """,
+        'EquipmentRegistry': """
+            INSERT INTO EquipmentRegistry
+            (EquipmentID, EquipmentType, PumpSubType, Manufacturer, ModelNumber, SerialNumber,
+             InstallDate, RatedCapacityTons, RatedPowerKW, RatedFlowLPS, RatedHeadM,
+             DesignCHWSTCelsius, DesignCHWRTCelsius, DesignCWSTCelsius, DesignCWRTCelsius,
+             DesignApproachCelsius, RefrigerantType, RatedCOPFull, RatedIPLV, HasVFD,
+             FanCount, FanPowerKWEach, ServiceIntervalHours, LastServiceDate,
+             NextServiceDueDate, WarrantyExpiryDate, Location, Status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
     }
     
@@ -1545,6 +1729,13 @@ def insert_to_sqlserver(data_dict):
         if table_name == 'AgentDecisions':
             # Skip empty table
             continue
+        if table_name == 'EquipmentRegistry':
+            # DELETE existing rows first (static table — full replace)
+            try:
+                cursor.execute("DELETE FROM EquipmentRegistry")
+                conn.commit()
+            except Exception:
+                pass
             
         if table_name not in table_insert_queries:
             print(f"⚠️  Skipping {table_name} (no INSERT query defined)")

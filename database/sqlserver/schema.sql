@@ -368,3 +368,40 @@ CREATE TABLE AgentDecisions (
     PUEPredictionError          DECIMAL(10,3)
 );
 GO
+
+-- ============================================================
+-- TABLE 15: EquipmentRegistry (Static metadata)
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'EquipmentRegistry')
+CREATE TABLE EquipmentRegistry (
+    ID                      INT IDENTITY(1,1) PRIMARY KEY,
+    EquipmentID             NVARCHAR(20)  NOT NULL UNIQUE,
+    EquipmentType           NVARCHAR(20)  NOT NULL,   -- CHILLER, PUMP, COOLING_TOWER
+    PumpSubType             NVARCHAR(10)  NULL,        -- PCHWP, SCHWP, CWP
+    Manufacturer            NVARCHAR(50)  NOT NULL,
+    ModelNumber             NVARCHAR(50)  NOT NULL,
+    SerialNumber            NVARCHAR(50)  NOT NULL,
+    InstallDate             DATE          NOT NULL,
+    RatedCapacityTons       DECIMAL(10,2) NULL,
+    RatedPowerKW            DECIMAL(10,2) NOT NULL,
+    RatedFlowLPS            DECIMAL(10,2) NULL,
+    RatedHeadM              DECIMAL(10,2) NULL,
+    DesignCHWSTCelsius      DECIMAL(10,2) NULL,
+    DesignCHWRTCelsius      DECIMAL(10,2) NULL,
+    DesignCWSTCelsius       DECIMAL(10,2) NULL,
+    DesignCWRTCelsius       DECIMAL(10,2) NULL,
+    DesignApproachCelsius   DECIMAL(10,2) NULL,
+    RefrigerantType         NVARCHAR(20)  NULL,
+    RatedCOPFull            DECIMAL(10,3) NULL,
+    RatedIPLV               DECIMAL(10,3) NULL,
+    HasVFD                  BIT           NOT NULL DEFAULT 0,
+    FanCount                INT           NULL,
+    FanPowerKWEach          DECIMAL(10,2) NULL,
+    ServiceIntervalHours    INT           NOT NULL,
+    LastServiceDate         DATE          NULL,
+    NextServiceDueDate      DATE          NULL,
+    WarrantyExpiryDate      DATE          NULL,
+    Location                NVARCHAR(50)  NOT NULL,
+    Status                  NVARCHAR(10)  NOT NULL    -- ACTIVE, STANDBY
+);
+GO
