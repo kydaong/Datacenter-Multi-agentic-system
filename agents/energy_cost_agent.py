@@ -7,7 +7,10 @@ Business-focused agent that evaluates all proposals from cost/sustainability per
 import sys
 sys.path.append('..')
 
-from base_agent import BaseAgent
+try:
+    from agents.base_agent import BaseAgent
+except ImportError:
+    from base_agent import BaseAgent
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import numpy as np

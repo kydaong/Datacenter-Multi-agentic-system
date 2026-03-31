@@ -1,401 +1,434 @@
 """
-Short-Term Memory (SQL Server)
-Stores last 24 hours of operational state, recent decisions, active constraints
-Fast queries for real-time agent decision-making
+Short-Term Memory
+Stores recent decisions, system state, and agent interactions (last 24 hours)
+Uses SQL Server for persistence (could be Redis in production for faster access)
 """
 
 import pyodbc
-import pandas as pd
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import os
-from typing import Dict, List, Optional, Any
 import json
 
-load_dotenv()
 
 class ShortTermMemory:
     """
-    Short-term memory: Last 24 hours of operational data
+    Short-term memory for MAGS
     
-    Used by agents for:
-    - Current system state
-    - Recent decisions (last few hours)
-    - Active alarms and constraints
-    - Latest equipment performance
+    Stores:
+    - Recent agent proposals (last 24 hours)
+    - Recent decisions and outcomes
+    - Active system state
+    - Recent performance metrics
+    - Pending actions
+    
+    Purpose: Fast retrieval for real-time decision making
     """
     
-    def __init__(self):
-        self.conn_str = (
-            f"DRIVER={{{os.getenv('DB_DRIVER')}}};"
-            f"SERVER={os.getenv('DB_SERVER')};"
-            f"DATABASE={os.getenv('DB_NAME')};"
-            f"UID={os.getenv('DB_USER')};"
-            f"PWD={{{os.getenv('DB_PASSWORD')}}};"
-            f"TrustServerCertificate=yes;"
-        )
+    def __init__(self, connection_string: Optional[str] = None):
+        """
+        Initialize short-term memory
         
-        print(f"✅ Short-term memory connected to {os.getenv('DB_NAME')}")
+        Args:
+            connection_string: SQL Server connection string
+        """
+        
+        if connection_string is None:
+            connection_string = (
+                "DRIVER={ODBC Driver 17 for SQL Server};"
+                "SERVER=localhost\\SQLEXPRESS;"
+                "DATABASE=AOM-Dev;"
+                "Trusted_Connection=yes;"
+            )
+        
+        self.connection_string = connection_string
+        self.retention_hours = 24  # Keep data for 24 hours
+        
+        print("  Initializing Short-Term Memory...")
+        self._create_tables_if_not_exist()
     
-    def get_connection(self):
+    def _get_connection(self):
         """Get database connection"""
-        return pyodbc.connect(self.conn_str)
+        return pyodbc.connect(self.connection_string)
     
-    def get_latest_system_state(self) -> Dict:
-        """
-        Get the most recent complete system state
+    def _create_tables_if_not_exist(self):
+        """Create short-term memory tables"""
         
-        Returns:
-            Dictionary with latest metrics from all subsystems
-        """
-        
-        conn = self.get_connection()
-        
-        # Get latest system performance metrics
-        query_system = """
-            SELECT TOP 1
-                Timestamp,
-                TotalChillerPowerKW,
-                TotalCoolingLoadTons,
-                TotalCoolingLoadKW,
-                SystemEfficiencyKWPerTon,
-                SystemCOP,
-                ITLoadPowerKW,
-                PUE,
-                ChillersOnline,
-                RedundancyLevel,
-                OutdoorWetBulbC
-            FROM SystemPerformanceMetrics
-            ORDER BY Timestamp DESC
-        """
-        
-        df_system = pd.read_sql(query_system, conn)
-        
-        if df_system.empty:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Table: Recent Proposals
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stm_recent_proposals')
+            CREATE TABLE stm_recent_proposals (
+                proposal_id INT IDENTITY(1,1) PRIMARY KEY,
+                agent_name VARCHAR(100) NOT NULL,
+                proposal_time DATETIME NOT NULL,
+                action_type VARCHAR(50),
+                proposal_json NVARCHAR(MAX),
+                context_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Recent Decisions
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stm_recent_decisions')
+            CREATE TABLE stm_recent_decisions (
+                decision_id INT IDENTITY(1,1) PRIMARY KEY,
+                session_id VARCHAR(50),
+                decision_time DATETIME NOT NULL,
+                decision_type VARCHAR(50),
+                executed BIT DEFAULT 0,
+                execution_result VARCHAR(20),
+                decision_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: System State Snapshots
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stm_system_state')
+            CREATE TABLE stm_system_state (
+                state_id INT IDENTITY(1,1) PRIMARY KEY,
+                snapshot_time DATETIME NOT NULL,
+                cooling_load_kw FLOAT,
+                it_load_kw FLOAT,
+                total_facility_power_kw FLOAT,
+                current_pue FLOAT,
+                chillers_online VARCHAR(100),
+                state_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Pending Actions
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stm_pending_actions')
+            CREATE TABLE stm_pending_actions (
+                action_id INT IDENTITY(1,1) PRIMARY KEY,
+                session_id VARCHAR(50),
+                action_type VARCHAR(50),
+                scheduled_time DATETIME,
+                status VARCHAR(20) DEFAULT 'PENDING',
+                action_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            conn.commit()
             conn.close()
-            return {}
-        
-        system_state = df_system.iloc[0].to_dict()
-        
-        # Get active chillers status
-        query_chillers = """
-            SELECT TOP 3
-                ChillerID,
-                LoadPercentage,
-                KWPerTon,
-                COP,
-                CHWSTHeaderTempC,
-                CWSTHeaderTempC,
-                RunningStatus
-            FROM ChillerOperatingPoints
-            WHERE Timestamp = (SELECT MAX(Timestamp) FROM ChillerOperatingPoints)
-            ORDER BY ChillerID
-        """
-        
-        df_chillers = pd.read_sql(query_chillers, conn)
-        system_state['active_chillers'] = df_chillers.to_dict('records')
-        
-        # Get latest weather
-        query_weather = """
-            SELECT TOP 1
-                WetBulbTempCelsius,
-                OutdoorTempCelsius,
-                RelativeHumidityPercent
-            FROM WeatherConditions
-            ORDER BY Timestamp DESC
-        """
-        
-        df_weather = pd.read_sql(query_weather, conn)
-        if not df_weather.empty:
-            system_state['weather'] = df_weather.iloc[0].to_dict()
-        
-        conn.close()
-        
-        return system_state
+            
+        except Exception as e:
+            print(f"  Warning: STM table creation error: {e}")
     
-    def get_active_alarms(self, severity: Optional[str] = None) -> List[Dict]:
-        """
-        Get currently active equipment alarms
-        
-        Args:
-            severity: Filter by severity (CRITICAL, WARNING)
-        
-        Returns:
-            List of active alarms
-        """
-        
-        conn = self.get_connection()
-        
-        if severity:
-            query = """
-                SELECT 
-                    ID,
-                    Timestamp,
-                    EquipmentID,
-                    EquipmentType,
-                    AlarmCode,
-                    AlarmDescription,
-                    AlarmSeverity,
-                    TriggeredValue,
-                    ThresholdValue,
-                    Unit
-                FROM EquipmentAlarms
-                WHERE AlarmStatus = 'ACTIVE'
-                  AND AlarmSeverity = ?
-                ORDER BY Timestamp DESC
-            """
-            df = pd.read_sql(query, conn, params=(severity,))
-        else:
-            query = """
-                SELECT 
-                    ID,
-                    Timestamp,
-                    EquipmentID,
-                    EquipmentType,
-                    AlarmCode,
-                    AlarmDescription,
-                    AlarmSeverity,
-                    TriggeredValue,
-                    ThresholdValue,
-                    Unit
-                FROM EquipmentAlarms
-                WHERE AlarmStatus = 'ACTIVE'
-                ORDER BY AlarmSeverity DESC, Timestamp DESC
-            """
-            df = pd.read_sql(query, conn)
-        
-        conn.close()
-        
-        return df.to_dict('records')
-    
-    def get_recent_decisions(self, hours: int = 4) -> List[Dict]:
-        """
-        Get agent decisions from last N hours
-        
-        Args:
-            hours: Hours to look back
-        
-        Returns:
-            Recent decisions with outcomes
-        """
-        
-        conn = self.get_connection()
-        
-        query = """
-            SELECT 
-                DecisionID,
-                Timestamp,
-                ProposedByAgent,
-                DecisionType,
-                Proposal,
-                AgentsVotes,
-                Approved,
-                Executed,
-                PredictedEnergySavingsKW,
-                ActualEnergySavingsKW
-            FROM AgentDecisions
-            WHERE Timestamp >= DATEADD(HOUR, ?, (SELECT MAX(Timestamp) FROM AgentDecisions))
-            ORDER BY Timestamp DESC
-        """
-
-        df = pd.read_sql(query, conn, params=(-hours,))
-        conn.close()
-        
-        # Parse JSON columns
-        if not df.empty:
-            df['Proposal'] = df['Proposal'].apply(lambda x: json.loads(x) if x else {})
-            df['AgentsVotes'] = df['AgentsVotes'].apply(lambda x: json.loads(x) if x else {})
-        
-        return df.to_dict('records')
-    
-    def get_recent_chiller_performance(
+    def store_proposal(
         self,
-        chiller_id: str,
-        hours: int = 1
-    ) -> pd.DataFrame:
-        """
-        Get recent chiller performance (last hour by default)
-        
-        Args:
-            chiller_id: Chiller identifier
-            hours: Hours to retrieve
-        
-        Returns:
-            Recent performance data
-        """
-        
-        conn = self.get_connection()
-        
-        query = """
-            SELECT 
-                Timestamp,
-                LoadPercentage,
-                KWPerTon,
-                COP,
-                ChillerPowerKW,
-                CoolingLoadKW,
-                CHWSTHeaderTempC,
-                CHWRTHeaderTempC,
-                CWSTHeaderTempC
-            FROM ChillerOperatingPoints
-            WHERE ChillerID = ?
-              AND Timestamp >= DATEADD(HOUR, ?, GETDATE())
-            ORDER BY Timestamp DESC
-        """
-        
-        df = pd.read_sql(query, conn, params=(chiller_id, -hours))
-        conn.close()
-        
-        return df
-    
-    def get_equipment_runtime_status(self) -> Dict:
-        """
-        Get current runtime status for all equipment
-        
-        Returns:
-            Dictionary of equipment runtime info
-        """
-        
-        conn = self.get_connection()
-        
-        # Get chiller runtime
-        query_chillers = """
-            SELECT TOP 1
-                ChillerID,
-                RuntimeHoursTotal,
-                RuntimeHoursSinceService,
-                StartsToday
-            FROM ChillerTelemetry
-            WHERE Timestamp = (SELECT MAX(Timestamp) FROM ChillerTelemetry)
-        """
-        
-        df_chillers = pd.read_sql(query_chillers, conn)
-        
-        runtime_status = {
-            'chillers': df_chillers.to_dict('records') if not df_chillers.empty else []
-        }
-        
-        conn.close()
-        
-        return runtime_status
-    
-    def store_proposal(self, proposal: Dict):
+        agent_name: str,
+        proposal: Dict,
+        context: Dict
+    ):
         """
         Store agent proposal in short-term memory
-        (This would go to a proposals cache table in production)
         
         Args:
-            proposal: Proposal dictionary
+            agent_name: Name of proposing agent
+            proposal: Proposal data
+            context: System context at time of proposal
         """
         
-        # For now, proposals are stored in AgentDecisions table
-        # In production, you might have a separate ProposalsCache table
-        # for proposals that haven't been decided yet
-        
-        print(f"📝 Stored proposal from {proposal.get('agent')}")
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            INSERT INTO stm_recent_proposals (
+                agent_name, proposal_time, action_type,
+                proposal_json, context_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """, (
+                agent_name,
+                datetime.now(),
+                proposal.get('action_type'),
+                json.dumps(proposal),
+                json.dumps(context)
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            # Clean old proposals (>24 hours)
+            self._clean_old_proposals()
+            
+        except Exception as e:
+            print(f"  Warning: STM proposal storage error: {e}")
     
-    def get_current_equipment_constraints(self) -> Dict:
+    def store_decision(
+        self,
+        session_id: str,
+        decision: Dict
+    ):
         """
-        Get current equipment constraints
-        (e.g., equipment under maintenance, operating limits)
+        Store decision in short-term memory
+        
+        Args:
+            session_id: Session ID
+            decision: Decision data
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            INSERT INTO stm_recent_decisions (
+                session_id, decision_time, decision_type, decision_json
+            )
+            VALUES (?, ?, ?, ?)
+            """, (
+                session_id,
+                datetime.now(),
+                decision.get('action_type'),
+                json.dumps(decision)
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            self._clean_old_decisions()
+            
+        except Exception as e:
+            print(f"  Warning: STM decision storage error: {e}")
+    
+    def store_system_state(self, state: Dict):
+        """
+        Store system state snapshot
+        
+        Args:
+            state: Current system state
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            INSERT INTO stm_system_state (
+                snapshot_time, cooling_load_kw, it_load_kw,
+                total_facility_power_kw, current_pue,
+                chillers_online, state_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now(),
+                state.get('cooling_load_kw'),
+                state.get('it_load_kw'),
+                state.get('total_facility_power_kw'),
+                state.get('current_pue'),
+                ','.join(state.get('chillers_online', [])),
+                json.dumps(state)
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            self._clean_old_states()
+            
+        except Exception as e:
+            print(f"  Warning: STM state storage error: {e}")
+    
+    def get_recent_proposals(
+        self,
+        agent_name: Optional[str] = None,
+        hours: int = 24
+    ) -> List[Dict]:
+        """
+        Get recent proposals
+        
+        Args:
+            agent_name: Filter by agent (optional)
+            hours: Look back hours
         
         Returns:
-            Active constraints
+            List of recent proposals
         """
         
-        conn = self.get_connection()
-        
-        # Check for recent maintenance
-        query_maintenance = """
-            SELECT 
-                EquipmentID,
-                ServiceType,
-                NextServiceDueHours,
-                HoursAtService
-            FROM MaintenanceLogs
-            WHERE Timestamp >= DATEADD(DAY, -30, GETDATE())
-            ORDER BY Timestamp DESC
-        """
-        
-        df_maint = pd.read_sql(query_maintenance, conn)
-        
-        constraints = {
-            'recent_maintenance': df_maint.to_dict('records') if not df_maint.empty else []
-        }
-        
-        conn.close()
-        
-        return constraints
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            
+            if agent_name:
+                cursor.execute("""
+                SELECT agent_name, proposal_time, action_type, proposal_json
+                FROM stm_recent_proposals
+                WHERE agent_name = ? AND proposal_time >= ?
+                ORDER BY proposal_time DESC
+                """, (agent_name, cutoff_time))
+            else:
+                cursor.execute("""
+                SELECT agent_name, proposal_time, action_type, proposal_json
+                FROM stm_recent_proposals
+                WHERE proposal_time >= ?
+                ORDER BY proposal_time DESC
+                """, (cutoff_time,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            proposals = []
+            for row in rows:
+                proposals.append({
+                    'agent_name': row[0],
+                    'proposal_time': row[1],
+                    'action_type': row[2],
+                    'proposal': json.loads(row[3]) if row[3] else {}
+                })
+            
+            return proposals
+            
+        except Exception as e:
+            print(f"  Warning: STM proposal retrieval error: {e}")
+            return []
     
-    def get_last_24hr_summary(self) -> Dict:
+    def get_recent_decisions(self, hours: int = 24) -> List[Dict]:
         """
-        Get 24-hour performance summary
+        Get recent decisions
+        
+        Args:
+            hours: Look back hours
         
         Returns:
-            Summary statistics for last 24 hours
+            List of recent decisions
         """
         
-        conn = self.get_connection()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            
+            cursor.execute("""
+            SELECT session_id, decision_time, decision_type,
+                   executed, execution_result, decision_json
+            FROM stm_recent_decisions
+            WHERE decision_time >= ?
+            ORDER BY decision_time DESC
+            """, (cutoff_time,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            decisions = []
+            for row in rows:
+                decisions.append({
+                    'session_id': row[0],
+                    'decision_time': row[1],
+                    'decision_type': row[2],
+                    'executed': bool(row[3]),
+                    'execution_result': row[4],
+                    'decision': json.loads(row[5]) if row[5] else {}
+                })
+            
+            return decisions
+            
+        except Exception as e:
+            print(f"  Warning: STM decision retrieval error: {e}")
+            return []
+    
+    def get_current_state(self) -> Optional[Dict]:
+        """
+        Get most recent system state
         
-        query = """
-            SELECT 
-                AVG(PUE) AS AvgPUE,
-                MIN(PUE) AS MinPUE,
-                MAX(PUE) AS MaxPUE,
-                AVG(SystemEfficiencyKWPerTon) AS AvgEfficiency,
-                AVG(ITLoadPowerKW) AS AvgITLoad,
-                AVG(TotalCoolingSystemPowerKW) AS AvgCoolingPower
-            FROM SystemPerformanceMetrics
-            WHERE Timestamp >= DATEADD(HOUR, -24, (SELECT MAX(Timestamp) FROM SystemPerformanceMetrics))
+        Returns:
+            Current system state
         """
         
-        df = pd.read_sql(query, conn)
-        conn.close()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT TOP 1 snapshot_time, state_json
+            FROM stm_system_state
+            ORDER BY snapshot_time DESC
+            """)
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return {
+                    'snapshot_time': row[0],
+                    'state': json.loads(row[1]) if row[1] else {}
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"  Warning: STM state retrieval error: {e}")
+            return None
+    
+    def _clean_old_proposals(self):
+        """Remove proposals older than retention period"""
         
-        if df.empty:
-            return {}
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_time = datetime.now() - timedelta(hours=self.retention_hours)
+            
+            cursor.execute("""
+            DELETE FROM stm_recent_proposals
+            WHERE proposal_time < ?
+            """, (cutoff_time,))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            pass
+    
+    def _clean_old_decisions(self):
+        """Remove decisions older than retention period"""
         
-        return df.iloc[0].to_dict()
-
-
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_time = datetime.now() - timedelta(hours=self.retention_hours)
+            
+            cursor.execute("""
+            DELETE FROM stm_recent_decisions
+            WHERE decision_time < ?
+            """, (cutoff_time,))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            pass
+    
+    def _clean_old_states(self):
+        """Remove state snapshots older than retention period"""
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_time = datetime.now() - timedelta(hours=self.retention_hours)
+            
+            cursor.execute("""
+            DELETE FROM stm_system_state
+            WHERE snapshot_time < ?
+            """, (cutoff_time,))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            pass
 # Singleton instance
 short_term_memory = ShortTermMemory()
-
-# Test
-if __name__ == "__main__":
-    
-    print("="*70)
-    print("TESTING SHORT-TERM MEMORY")
-    print("="*70)
-    
-    # Test 1: Get current state
-    print("\n[TEST 1] Latest System State...")
-    state = short_term_memory.get_latest_system_state()
-    
-    if state:
-        print(f"  Timestamp: {state.get('Timestamp')}")
-        print(f"  PUE: {state.get('PUE')}")
-        print(f"  Chillers Online: {state.get('ChillersOnline')}")
-        print(f"  Active Chillers: {len(state.get('active_chillers', []))}")
-    
-    # Test 2: Active alarms
-    print("\n[TEST 2] Active Alarms...")
-    alarms = short_term_memory.get_active_alarms()
-    print(f"  Active alarms: {len(alarms)}")
-    
-    # Test 3: Recent decisions
-    print("\n[TEST 3] Recent Decisions...")
-    decisions = short_term_memory.get_recent_decisions(hours=24)
-    print(f"  Decisions (last 24hr): {len(decisions)}")
-    
-    # Test 4: 24hr summary
-    print("\n[TEST 4] 24-Hour Summary...")
-    summary = short_term_memory.get_last_24hr_summary()
-    
-    if summary:
-        avg_pue = summary.get('AvgPUE') or 0
-        avg_eff = summary.get('AvgEfficiency') or 0
-        print(f"  Avg PUE: {avg_pue:.3f}")
-        print(f"  Avg Efficiency: {avg_eff:.3f} kW/ton")
-    
-    print("\n✅ Short-term memory tests complete!")

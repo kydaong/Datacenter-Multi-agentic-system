@@ -207,7 +207,8 @@ class BaseAgent(ABC):
             Current metrics dictionary
         """
         
-        return self.short_term_memory.get_latest_system_state()
+        state = self.short_term_memory.get_current_state()
+        return state.get('state', {}) if state else {}
     
     def log_proposal(self, proposal: Dict):
         """
@@ -225,7 +226,11 @@ class BaseAgent(ABC):
         }
         
         # Store in short-term memory
-        self.short_term_memory.store_proposal(self.last_proposal)
+        self.short_term_memory.store_proposal(
+            agent_name=self.agent_name,
+            proposal=proposal,
+            context={}
+        )
     
     def calculate_confidence(
         self,

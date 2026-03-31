@@ -1,267 +1,410 @@
 """
-Medium-Term Memory (SQL Server)
-Stores 7-90 day patterns, decision outcomes, equipment performance
+Medium-Term Memory
+Stores operational patterns, performance trends (last 30-90 days)
+Enables pattern recognition and seasonal adjustments
 """
 
 import pyodbc
-import pandas as pd
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import os
 from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+import json
+import numpy as np
+import pandas as pd
 
-load_dotenv()
 
 class MediumTermMemory:
     """
-    Medium-term memory: 7-90 days of operational patterns
-    Used by agents to find historical precedents
+    Medium-term memory for MAGS
+    
+    Stores:
+    - Performance trends (30-90 days)
+    - Operational patterns (time of day, day of week)
+    - Decision outcomes and effectiveness
+    - Agent performance metrics
+    - System efficiency trends
+    
+    Purpose: Pattern recognition, learning from recent history
     """
     
-    def __init__(self):
-        self.conn_str = (
-            f"DRIVER={{{os.getenv('DB_DRIVER')}}};"
-            f"SERVER={os.getenv('DB_SERVER')};"
-            f"DATABASE={os.getenv('DB_NAME')};"
-            f"UID={os.getenv('DB_USER')};"
-            f"PWD={{{os.getenv('DB_PASSWORD')}}};"
-            f"TrustServerCertificate=yes;"
-        )
-        
-        print(f"✅ Medium-term memory connected to {os.getenv('DB_NAME')}")
-    
-    def get_connection(self):
-        """Get database connection"""
-        return pyodbc.connect(self.conn_str)
-    
-    def get_recent_chiller_performance(
-        self,
-        chiller_id: str,
-        days: int = 200
-    ) -> pd.DataFrame:
+    def __init__(self, connection_string: Optional[str] = None):
         """
-        Get recent chiller performance data
+        Initialize medium-term memory
         
         Args:
-            chiller_id: Chiller identifier
-            days: Number of days to look back
+            connection_string: SQL Server connection string
+        """
+        
+        if connection_string is None:
+            connection_string = (
+                "DRIVER={ODBC Driver 17 for SQL Server};"
+                "SERVER=localhost\\SQLEXPRESS;"
+                "DATABASE=AOM-Dev;"
+                "Trusted_Connection=yes;"
+            )
+        
+        self.connection_string = connection_string
+        self.retention_days = 90  # Keep data for 90 days
+        
+        print("  Initializing Medium-Term Memory...")
+        self._create_tables_if_not_exist()
+    
+    def _get_connection(self):
+        """Get database connection"""
+        return pyodbc.connect(self.connection_string)
+    
+    def _create_tables_if_not_exist(self):
+        """Create medium-term memory tables"""
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Table: Performance Trends
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'mtm_performance_trends')
+            CREATE TABLE mtm_performance_trends (
+                trend_id INT IDENTITY(1,1) PRIMARY KEY,
+                record_date DATE NOT NULL,
+                record_hour INT,
+                avg_pue FLOAT,
+                avg_cooling_load_kw FLOAT,
+                avg_efficiency_kw_per_ton FLOAT,
+                total_energy_kwh FLOAT,
+                total_cost_sgd FLOAT,
+                trends_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Operational Patterns
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'mtm_operational_patterns')
+            CREATE TABLE mtm_operational_patterns (
+                pattern_id INT IDENTITY(1,1) PRIMARY KEY,
+                pattern_type VARCHAR(50),
+                pattern_name VARCHAR(100),
+                frequency INT,
+                success_rate FLOAT,
+                avg_savings_kw FLOAT,
+                pattern_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Decision Outcomes
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'mtm_decision_outcomes')
+            CREATE TABLE mtm_decision_outcomes (
+                outcome_id INT IDENTITY(1,1) PRIMARY KEY,
+                session_id VARCHAR(50),
+                decision_time DATETIME NOT NULL,
+                decision_type VARCHAR(50),
+                predicted_savings_kw FLOAT,
+                actual_savings_kw FLOAT,
+                accuracy_percent FLOAT,
+                outcome_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Agent Performance
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'mtm_agent_performance')
+            CREATE TABLE mtm_agent_performance (
+                performance_id INT IDENTITY(1,1) PRIMARY KEY,
+                agent_name VARCHAR(100) NOT NULL,
+                evaluation_date DATE NOT NULL,
+                proposals_made INT,
+                proposals_accepted INT,
+                avg_confidence FLOAT,
+                avg_accuracy FLOAT,
+                performance_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: MTM table creation error: {e}")
+    
+    def store_daily_performance(self, date: datetime, metrics: Dict):
+        """
+        Store daily performance summary
+        
+        Args:
+            date: Date of performance
+            metrics: Performance metrics
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            INSERT INTO mtm_performance_trends (
+                record_date, avg_pue, avg_cooling_load_kw,
+                avg_efficiency_kw_per_ton, total_energy_kwh,
+                total_cost_sgd, trends_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                date.date(),
+                metrics.get('avg_pue'),
+                metrics.get('avg_cooling_load_kw'),
+                metrics.get('avg_efficiency_kw_per_ton'),
+                metrics.get('total_energy_kwh'),
+                metrics.get('total_cost_sgd'),
+                json.dumps(metrics)
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: MTM performance storage error: {e}")
+    
+    def store_decision_outcome(
+        self,
+        session_id: str,
+        decision_type: str,
+        predicted_savings: float,
+        actual_savings: float
+    ):
+        """
+        Store decision outcome for learning
+        
+        Args:
+            session_id: Decision session ID
+            decision_type: Type of decision
+            predicted_savings: Predicted energy savings (kW)
+            actual_savings: Actual measured savings (kW)
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Calculate accuracy
+            if predicted_savings > 0:
+                accuracy = (actual_savings / predicted_savings) * 100
+            else:
+                accuracy = 100 if actual_savings == 0 else 0
+            
+            cursor.execute("""
+            INSERT INTO mtm_decision_outcomes (
+                session_id, decision_time, decision_type,
+                predicted_savings_kw, actual_savings_kw, accuracy_percent
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                datetime.now(),
+                decision_type,
+                predicted_savings,
+                actual_savings,
+                accuracy
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: MTM outcome storage error: {e}")
+    
+    def get_performance_trend(
+        self,
+        metric: str,
+        days: int = 30
+    ) -> List[Dict]:
+        """
+        Get performance trend over time
+        
+        Args:
+            metric: Metric name (e.g., 'avg_pue', 'total_cost_sgd')
+            days: Number of days to retrieve
         
         Returns:
-            DataFrame with recent performance metrics
+            List of daily values
         """
         
-        conn = self.get_connection()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            query = f"""
+            SELECT record_date, {metric}
+            FROM mtm_performance_trends
+            WHERE record_date >= ?
+            ORDER BY record_date
+            """
+            
+            cursor.execute(query, (cutoff_date.date(),))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            trend = []
+            for row in rows:
+                trend.append({
+                    'date': row[0],
+                    'value': row[1]
+                })
+            
+            return trend
+            
+        except Exception as e:
+            print(f"  Warning: MTM trend retrieval error: {e}")
+            return []
+    
+    def get_decision_accuracy(
+        self,
+        decision_type: Optional[str] = None,
+        days: int = 30
+    ) -> Dict:
+        """
+        Get decision accuracy metrics
         
-        query = """
-            SELECT
-                Timestamp,
-                LoadPercentage,
-                KWPerTon,
-                COP,
-                CHWSTHeaderTempC,
-                CWSTHeaderTempC
-            FROM ChillerOperatingPoints
-            WHERE ChillerID = ?
-              AND Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM ChillerOperatingPoints))
-            ORDER BY Timestamp DESC
+        Args:
+            decision_type: Filter by decision type
+            days: Look back period
+        
+        Returns:
+            Accuracy statistics
         """
         
-        df = pd.read_sql(query, conn, params=(chiller_id, -days))
-        conn.close()
-        
-        return df
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            if decision_type:
+                cursor.execute("""
+                SELECT 
+                    AVG(accuracy_percent) as avg_accuracy,
+                    MIN(accuracy_percent) as min_accuracy,
+                    MAX(accuracy_percent) as max_accuracy,
+                    COUNT(*) as sample_count
+                FROM mtm_decision_outcomes
+                WHERE decision_type = ? AND decision_time >= ?
+                """, (decision_type, cutoff_date))
+            else:
+                cursor.execute("""
+                SELECT 
+                    AVG(accuracy_percent) as avg_accuracy,
+                    MIN(accuracy_percent) as min_accuracy,
+                    MAX(accuracy_percent) as max_accuracy,
+                    COUNT(*) as sample_count
+                FROM mtm_decision_outcomes
+                WHERE decision_time >= ?
+                """, (cutoff_date,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return {
+                    'avg_accuracy': row[0] if row[0] else 0,
+                    'min_accuracy': row[1] if row[1] else 0,
+                    'max_accuracy': row[2] if row[2] else 0,
+                    'sample_count': row[3] if row[3] else 0
+                }
+            
+            return {
+                'avg_accuracy': 0,
+                'min_accuracy': 0,
+                'max_accuracy': 0,
+                'sample_count': 0
+            }
+            
+        except Exception as e:
+            print(f"  Warning: MTM accuracy retrieval error: {e}")
+            return {}
     
     def get_similar_operating_conditions(
         self,
         cooling_load_kw: float,
         wet_bulb_temp: float,
-        tolerance_load: float = 100,
-        tolerance_temp: float = 1.0,
-        days: int = 90
+        days: int = 30,
+        tolerance_percent: float = 15.0
     ) -> pd.DataFrame:
         """
-        Find historical precedents with similar operating conditions
-        
-        Args:
-            cooling_load_kw: Target cooling load
-            wet_bulb_temp: Target wet-bulb temp
-            tolerance_load: Load tolerance (±kW)
-            tolerance_temp: Temperature tolerance (±°C)
-            days: How far back to search
-        
-        Returns:
-            DataFrame with similar historical conditions and outcomes
-        """
-        
-        conn = self.get_connection()
-        
-        query = """
-            SELECT TOP 20
-                c.Timestamp,
-                c.ChillerID,
-                c.LoadPercentage,
-                c.KWPerTon,
-                c.COP,
-                c.ChillerPowerKW,
-                c.CoolingLoadKW,
-                w.WetBulbTempCelsius
-            FROM ChillerOperatingPoints c
-            JOIN WeatherConditions w ON c.Timestamp = w.Timestamp
-            WHERE c.CoolingLoadKW BETWEEN ? AND ?
-              AND w.WetBulbTempCelsius BETWEEN ? AND ?
-              AND c.Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM ChillerOperatingPoints))
-            ORDER BY c.Timestamp DESC
-        """
-        
-        df = pd.read_sql(
-            query, 
-            conn, 
-            params=(
-                cooling_load_kw - tolerance_load,
-                cooling_load_kw + tolerance_load,
-                wet_bulb_temp - tolerance_temp,
-                wet_bulb_temp + tolerance_temp,
-                -days
-            )
-        )
-        
-        conn.close()
-        
-        return df
-    
-    def get_decision_outcomes(
-        self,
-        decision_type: Optional[str] = None,
-        days: int = 30
-    ) -> pd.DataFrame:
-        """
-        Get recent agent decisions and their outcomes
-        
-        Args:
-            decision_type: Filter by decision type (e.g., "CHILLER_STAGING")
-            days: Days to look back
-        
-        Returns:
-            DataFrame with decisions and accuracy metrics
-        """
-        
-        conn = self.get_connection()
-        
-        if decision_type:
-            query = """
-                SELECT 
-                    Timestamp,
-                    ProposedByAgent,
-                    DecisionType,
-                    Approved,
-                    Executed,
-                    PredictedEnergySavingsKW,
-                    ActualEnergySavingsKW,
-                    EnergyPredictionErrorPct
-                FROM AgentDecisions
-                WHERE DecisionType = ?
-                  AND Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM AgentDecisions))
-                ORDER BY Timestamp DESC
-            """
-            df = pd.read_sql(query, conn, params=(decision_type, -days))
-        else:
-            query = """
-                SELECT 
-                    Timestamp,
-                    ProposedByAgent,
-                    DecisionType,
-                    Approved,
-                    Executed,
-                    PredictedEnergySavingsKW,
-                    ActualEnergySavingsKW,
-                    EnergyPredictionErrorPct
-                FROM AgentDecisions
-                WHERE Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM AgentDecisions))
-                ORDER BY Timestamp DESC
-            """
-            df = pd.read_sql(query, conn, params=(-days,))
-        
-        conn.close()
-        
-        return df
-    
-    def get_equipment_health_trends(
-        self,
-        equipment_id: str,
-        days: int = 100
-    ) -> Dict:
-        """
-        Get equipment health trends (vibration, efficiency degradation)
-        
-        Args:
-            equipment_id: Equipment identifier
-            days: Days to analyze
-        
-        Returns:
-            Dictionary with health metrics
-        """
-        
-        conn = self.get_connection()
-        
-        # Different query based on equipment type
-        if 'Chiller' in equipment_id:
-            query = """
-                SELECT 
-                    AVG(VibrationMmS) AS AvgVibration,
-                    MAX(VibrationMmS) AS MaxVibration,
-                    AVG(BearingTempCelsius) AS AvgBearingTemp,
-                    AVG(EfficiencyKwPerTon) AS AvgEfficiency
-                FROM ChillerTelemetry
-                WHERE ChillerID = ?
-                  AND Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM ChillerTelemetry))
-            """
-        elif 'Pump' in equipment_id:
-            query = """
-                SELECT 
-                    AVG(VibrationMmS) AS AvgVibration,
-                    MAX(VibrationMmS) AS MaxVibration,
-                    AVG(PowerConsumptionKW) AS AvgPowerKW
-                FROM PumpTelemetry
-                WHERE PumpID = ?
-                  AND Timestamp >= DATEADD(DAY, ?, (SELECT MAX(Timestamp) FROM PumpTelemetry))
-            """
-        else:
-            return {}
-        
-        df = pd.read_sql(query, conn, params=(equipment_id, -days))
-        conn.close()
-        
-        if not df.empty:
-            return df.iloc[0].to_dict()
-        return {}
+        Find historical records with similar operating conditions
 
+        Args:
+            cooling_load_kw: Current cooling load to match
+            wet_bulb_temp: Current wet-bulb temperature (used as metadata filter)
+            days: How many days back to search
+            tolerance_percent: Acceptable % deviation in cooling load
 
+        Returns:
+            DataFrame of matching records (empty if none found)
+        """
+
+        try:
+            conn = self._get_connection()
+
+            cutoff_date = datetime.now() - timedelta(days=days)
+            load_min = cooling_load_kw * (1 - tolerance_percent / 100)
+            load_max = cooling_load_kw * (1 + tolerance_percent / 100)
+
+            query = """
+            SELECT
+                record_date, record_hour,
+                avg_pue, avg_cooling_load_kw,
+                avg_efficiency_kw_per_ton,
+                total_energy_kwh, total_cost_sgd,
+                trends_json
+            FROM mtm_performance_trends
+            WHERE record_date >= ?
+              AND avg_cooling_load_kw BETWEEN ? AND ?
+            ORDER BY record_date DESC
+            """
+
+            df = pd.read_sql(query, conn, params=(cutoff_date.date(), load_min, load_max))
+            conn.close()
+
+            return df
+
+        except Exception as e:
+            print(f"  Warning: MTM similar conditions retrieval error: {e}")
+            return pd.DataFrame()
+
+    def identify_patterns(self, days: int = 30) -> List[Dict]:
+        """
+        Identify operational patterns
+        
+        Args:
+            days: Analysis period
+        
+        Returns:
+            List of identified patterns
+        """
+        
+        # Simplified pattern identification
+        # In production, this would use ML algorithms
+        
+        patterns = []
+        
+        # Pattern 1: Time-of-day load patterns
+        trend = self.get_performance_trend('avg_cooling_load_kw', days)
+        
+        if trend:
+            loads = [t['value'] for t in trend if t['value']]
+            if loads:
+                avg_load = np.mean(loads)
+                patterns.append({
+                    'pattern_type': 'LOAD_PATTERN',
+                    'pattern_name': 'Average Daily Load',
+                    'value': avg_load,
+                    'confidence': 0.85
+                })
+        
+        return patterns
 # Singleton instance
 medium_term_memory = MediumTermMemory()
-
-# Example usage
-if __name__ == "__main__":
-    
-    # Test 1: Get recent performance
-    print("\n[TEST 1] Recent Chiller Performance...")
-    df = medium_term_memory.get_recent_chiller_performance('Chiller-1', days=7)
-    print(f"Found {len(df)} records")
-    if not df.empty:
-        print(df.head())
-    
-    # Test 2: Find similar conditions
-    print("\n[TEST 2] Similar Operating Conditions...")
-    df = medium_term_memory.get_similar_operating_conditions(
-        cooling_load_kw=2560,
-        wet_bulb_temp=25.0,
-        tolerance_load=300,
-        days=30
-    )
-    print(f"Found {len(df)} similar conditions")
-    if not df.empty:
-        print(df.head())
-    
-    # Test 3: Equipment health
-    print("\n[TEST 3] Equipment Health Trends...")
-    health = medium_term_memory.get_equipment_health_trends('Chiller-1', days=30)
-    print(health)

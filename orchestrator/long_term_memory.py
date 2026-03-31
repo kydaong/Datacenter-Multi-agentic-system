@@ -1,390 +1,700 @@
 """
-Long-Term Memory (SQL Server)
-Stores 1+ years of historical data, seasonal baselines, equipment lifecycle trends
+Long-Term Memory
+Stores historical knowledge, learned patterns, system evolution (1+ years)
+Enables strategic learning and continuous improvement
 """
 
 import pyodbc
-import pandas as pd
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import os
-from typing import Dict, List, Optional
+import json
+import numpy as np
 
-load_dotenv()
 
 class LongTermMemory:
     """
-    Long-term memory: 1+ years of historical patterns
+    Long-term memory for MAGS
     
-    Used by agents for:
-    - Seasonal baselines (summer vs winter patterns)
-    - Equipment degradation trends
+    Stores:
+    - Historical performance baselines
+    - Seasonal patterns (summer vs winter)
+    - Equipment degradation curves
+    - Proven optimization strategies
     - Long-term efficiency trends
-    - Maintenance history and patterns
-    - Compliance audit history
+    - Major events and anomalies
+    
+    Purpose: Strategic learning, seasonal adjustments, equipment life-cycle management
     """
     
-    def __init__(self):
-        self.conn_str = (
-            f"DRIVER={{{os.getenv('DB_DRIVER')}}};"
-            f"SERVER={os.getenv('DB_SERVER')};"
-            f"DATABASE={os.getenv('DB_NAME')};"
-            f"UID={os.getenv('DB_USER')};"
-            f"PWD={{{os.getenv('DB_PASSWORD')}}};"
-            f"TrustServerCertificate=yes;"
-        )
-        
-        print(f"✅ Long-term memory connected to {os.getenv('DB_NAME')}")
-    
-    def get_connection(self):
-        """Get database connection"""
-        return pyodbc.connect(self.conn_str)
-    
-    def get_seasonal_baseline(
-        self,
-        month: int,
-        metric: str = 'PUE'
-    ) -> Dict:
+    def __init__(self, connection_string: Optional[str] = None):
         """
-        Get seasonal baseline for a specific month
+        Initialize long-term memory
+        
+        Args:
+            connection_string: SQL Server connection string
+        """
+        
+        if connection_string is None:
+            connection_string = (
+                "DRIVER={ODBC Driver 17 for SQL Server};"
+                "SERVER=localhost\\SQLEXPRESS;"
+                "DATABASE=AOM-Dev;"
+                "Trusted_Connection=yes;"
+            )
+        
+        self.connection_string = connection_string
+        
+        print("  Initializing Long-Term Memory...")
+        self._create_tables_if_not_exist()
+    
+    def _get_connection(self):
+        """Get database connection"""
+        return pyodbc.connect(self.connection_string)
+    
+    def _create_tables_if_not_exist(self):
+        """Create long-term memory tables"""
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Table: Historical Baselines
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_baselines')
+            CREATE TABLE ltm_baselines (
+                baseline_id INT IDENTITY(1,1) PRIMARY KEY,
+                baseline_type VARCHAR(50) NOT NULL,
+                baseline_name VARCHAR(100),
+                baseline_value FLOAT,
+                established_date DATE,
+                last_updated DATETIME,
+                baseline_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Seasonal Patterns
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_seasonal_patterns')
+            CREATE TABLE ltm_seasonal_patterns (
+                pattern_id INT IDENTITY(1,1) PRIMARY KEY,
+                season VARCHAR(20),
+                month INT,
+                pattern_type VARCHAR(50),
+                avg_cooling_load_kw FLOAT,
+                avg_wet_bulb_temp FLOAT,
+                avg_pue FLOAT,
+                pattern_json NVARCHAR(MAX),
+                years_data INT DEFAULT 1,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Equipment Degradation
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_equipment_degradation')
+            CREATE TABLE ltm_equipment_degradation (
+                degradation_id INT IDENTITY(1,1) PRIMARY KEY,
+                equipment_id VARCHAR(50) NOT NULL,
+                equipment_type VARCHAR(50),
+                install_date DATE,
+                current_age_years FLOAT,
+                baseline_efficiency FLOAT,
+                current_efficiency FLOAT,
+                degradation_rate_percent_per_year FLOAT,
+                degradation_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Proven Strategies
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_proven_strategies')
+            CREATE TABLE ltm_proven_strategies (
+                strategy_id INT IDENTITY(1,1) PRIMARY KEY,
+                strategy_name VARCHAR(100) NOT NULL,
+                strategy_type VARCHAR(50),
+                success_count INT DEFAULT 0,
+                total_attempts INT DEFAULT 0,
+                success_rate FLOAT,
+                avg_savings_kw FLOAT,
+                avg_roi_months FLOAT,
+                applicable_conditions NVARCHAR(MAX),
+                strategy_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Major Events
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_major_events')
+            CREATE TABLE ltm_major_events (
+                event_id INT IDENTITY(1,1) PRIMARY KEY,
+                event_date DATETIME NOT NULL,
+                event_type VARCHAR(50),
+                event_description NVARCHAR(500),
+                impact_description NVARCHAR(MAX),
+                lessons_learned NVARCHAR(MAX),
+                event_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            # Table: Knowledge Base
+            cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ltm_knowledge_base')
+            CREATE TABLE ltm_knowledge_base (
+                knowledge_id INT IDENTITY(1,1) PRIMARY KEY,
+                knowledge_category VARCHAR(50),
+                knowledge_title VARCHAR(200),
+                knowledge_content NVARCHAR(MAX),
+                confidence_score FLOAT,
+                source VARCHAR(100),
+                knowledge_json NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+            """)
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM table creation error: {e}")
+    
+    def establish_baseline(
+        self,
+        baseline_type: str,
+        baseline_name: str,
+        baseline_value: float,
+        metadata: Optional[Dict] = None
+    ):
+        """
+        Establish a performance baseline
+        
+        Args:
+            baseline_type: Type (e.g., 'PUE', 'EFFICIENCY', 'COST')
+            baseline_name: Descriptive name
+            baseline_value: Baseline value
+            metadata: Additional metadata
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Check if baseline exists
+            cursor.execute("""
+            SELECT baseline_id FROM ltm_baselines
+            WHERE baseline_type = ? AND baseline_name = ?
+            """, (baseline_type, baseline_name))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update existing
+                cursor.execute("""
+                UPDATE ltm_baselines
+                SET baseline_value = ?, last_updated = ?, baseline_json = ?
+                WHERE baseline_type = ? AND baseline_name = ?
+                """, (
+                    baseline_value,
+                    datetime.now(),
+                    json.dumps(metadata or {}),
+                    baseline_type,
+                    baseline_name
+                ))
+            else:
+                # Insert new
+                cursor.execute("""
+                INSERT INTO ltm_baselines (
+                    baseline_type, baseline_name, baseline_value,
+                    established_date, last_updated, baseline_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    baseline_type,
+                    baseline_name,
+                    baseline_value,
+                    datetime.now().date(),
+                    datetime.now(),
+                    json.dumps(metadata or {})
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM baseline establishment error: {e}")
+    
+    def get_baseline(
+        self,
+        baseline_type: str,
+        baseline_name: str
+    ) -> Optional[Dict]:
+        """
+        Get established baseline
+        
+        Args:
+            baseline_type: Baseline type
+            baseline_name: Baseline name
+        
+        Returns:
+            Baseline data or None
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT baseline_value, established_date, last_updated, baseline_json
+            FROM ltm_baselines
+            WHERE baseline_type = ? AND baseline_name = ?
+            """, (baseline_type, baseline_name))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return {
+                    'baseline_value': row[0],
+                    'established_date': row[1],
+                    'last_updated': row[2],
+                    'metadata': json.loads(row[3]) if row[3] else {}
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"  Warning: LTM baseline retrieval error: {e}")
+            return None
+    
+    def store_seasonal_pattern(
+        self,
+        season: str,
+        month: int,
+        pattern_data: Dict
+    ):
+        """
+        Store seasonal pattern
+        
+        Args:
+            season: Season name (WINTER, SPRING, SUMMER, FALL)
+            month: Month number (1-12)
+            pattern_data: Pattern metrics
+        """
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Check if pattern exists
+            cursor.execute("""
+            SELECT pattern_id, years_data FROM ltm_seasonal_patterns
+            WHERE season = ? AND month = ?
+            """, (season, month))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update existing (rolling average)
+                pattern_id = existing[0]
+                years_data = existing[1] + 1
+                
+                cursor.execute("""
+                UPDATE ltm_seasonal_patterns
+                SET 
+                    avg_cooling_load_kw = (avg_cooling_load_kw * years_data + ?) / (years_data + 1),
+                    avg_wet_bulb_temp = (avg_wet_bulb_temp * years_data + ?) / (years_data + 1),
+                    avg_pue = (avg_pue * years_data + ?) / (years_data + 1),
+                    pattern_json = ?,
+                    years_data = ?,
+                    updated_at = ?
+                WHERE pattern_id = ?
+                """, (
+                    pattern_data.get('avg_cooling_load_kw', 0),
+                    pattern_data.get('avg_wet_bulb_temp', 0),
+                    pattern_data.get('avg_pue', 0),
+                    json.dumps(pattern_data),
+                    years_data,
+                    datetime.now(),
+                    pattern_id
+                ))
+            else:
+                # Insert new
+                cursor.execute("""
+                INSERT INTO ltm_seasonal_patterns (
+                    season, month, pattern_type,
+                    avg_cooling_load_kw, avg_wet_bulb_temp, avg_pue,
+                    pattern_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    season,
+                    month,
+                    'SEASONAL',
+                    pattern_data.get('avg_cooling_load_kw'),
+                    pattern_data.get('avg_wet_bulb_temp'),
+                    pattern_data.get('avg_pue'),
+                    json.dumps(pattern_data)
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM seasonal pattern storage error: {e}")
+    
+    def get_seasonal_pattern(
+        self,
+        month: int
+    ) -> Optional[Dict]:
+        """
+        Get seasonal pattern for month
         
         Args:
             month: Month number (1-12)
-            metric: Metric to retrieve (PUE, SystemEfficiencyKWPerTon, etc.)
         
         Returns:
-            Baseline statistics for that month
+            Seasonal pattern data
         """
         
-        conn = self.get_connection()
-        
-        query = f"""
-            SELECT 
-                AVG({metric}) AS Baseline,
-                STDEV({metric}) AS StdDev,
-                MIN({metric}) AS Best,
-                MAX({metric}) AS Worst,
-                COUNT(*) AS SampleSize
-            FROM SystemPerformanceMetrics
-            WHERE MONTH(Timestamp) = ?
-        """
-        
-        df = pd.read_sql(query, conn, params=(month,))
-        conn.close()
-        
-        if df.empty:
-            return {}
-        
-        return df.iloc[0].to_dict()
-    
-    def get_equipment_lifecycle_data(
-        self,
-        equipment_id: str
-    ) -> Dict:
-        """
-        Get complete equipment lifecycle data
-        
-        Args:
-            equipment_id: Equipment identifier
-        
-        Returns:
-            Installation date, total runtime, maintenance history
-        """
-        
-        conn = self.get_connection()
-        
-        # Get equipment summary from operational tables
-        if 'Chiller' in equipment_id:
-            query_master = """
-                SELECT
-                    MIN(Timestamp)          AS FirstSeen,
-                    MAX(Timestamp)          AS LastSeen,
-                    AVG(PartLoadEfficiencyKWPerTon) AS AvgEfficiency,
-                    AVG(LoadPercentage)             AS AvgLoadPercent,
-                    MAX(RefrigerantType)            AS RefrigerantType,
-                    COUNT(*)                AS TotalRecords
-                FROM ChillerPerformanceMonitoring
-                WHERE ChillerID = ?
-            """
-        elif 'Pump' in equipment_id:
-            query_master = """
-                SELECT
-                    MIN(Timestamp)          AS FirstSeen,
-                    MAX(Timestamp)          AS LastSeen,
-                    AVG(PowerConsumptionKW) AS AvgPowerKW,
-                    COUNT(*)                AS TotalRecords
-                FROM PumpTelemetry
-                WHERE PumpID = ?
-            """
-        else:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT season, avg_cooling_load_kw, avg_wet_bulb_temp,
+                   avg_pue, pattern_json, years_data
+            FROM ltm_seasonal_patterns
+            WHERE month = ?
+            """, (month,))
+            
+            row = cursor.fetchone()
             conn.close()
-            return {}
-
-        df_master = pd.read_sql(query_master, conn, params=(equipment_id,))
-
-        if df_master.empty:
-            conn.close()
-            return {}
-
-        lifecycle = df_master.iloc[0].to_dict()
-        
-        # Get maintenance history
-        query_maint = """
-            SELECT 
-                Timestamp,
-                ServiceType,
-                HoursAtService,
-                CostSGD
-            FROM MaintenanceLogs
-            WHERE EquipmentID = ?
-            ORDER BY Timestamp DESC
-        """
-        
-        df_maint = pd.read_sql(query_maint, conn, params=(equipment_id,))
-        lifecycle['maintenance_history'] = df_maint.to_dict('records')
-        lifecycle['total_maintenance_events'] = len(df_maint)
-        
-        if not df_maint.empty:
-            lifecycle['total_maintenance_cost'] = df_maint['CostSGD'].sum()
-        
-        conn.close()
-        
-        return lifecycle
+            
+            if row:
+                return {
+                    'season': row[0],
+                    'avg_cooling_load_kw': row[1],
+                    'avg_wet_bulb_temp': row[2],
+                    'avg_pue': row[3],
+                    'pattern': json.loads(row[4]) if row[4] else {},
+                    'years_data': row[5]
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"  Warning: LTM seasonal pattern retrieval error: {e}")
+            return None
     
-    def get_efficiency_degradation_trend(
+    def track_equipment_degradation(
         self,
         equipment_id: str,
-        months: int = 12
-    ) -> pd.DataFrame:
+        equipment_type: str,
+        current_efficiency: float,
+        baseline_efficiency: float,
+        install_date: datetime
+    ):
         """
-        Get efficiency degradation trend over time
+        Track equipment degradation over time
         
         Args:
             equipment_id: Equipment identifier
-            months: Months to analyze
-        
-        Returns:
-            Monthly average efficiency over time
+            equipment_type: Type (CHILLER, PUMP, TOWER)
+            current_efficiency: Current efficiency
+            baseline_efficiency: Original efficiency
+            install_date: Installation date
         """
         
-        conn = self.get_connection()
-        
-        if 'Chiller' in equipment_id:
-            query = """
-                SELECT 
-                    YEAR(Timestamp) AS Year,
-                    MONTH(Timestamp) AS Month,
-                    AVG(KWPerTon) AS AvgEfficiency,
-                    AVG(LoadPercentage) AS AvgLoad,
-                    COUNT(*) AS SampleSize
-                FROM ChillerOperatingPoints
-                WHERE ChillerID = ?
-                  AND Timestamp >= DATEADD(MONTH, ?, (SELECT MAX(Timestamp) FROM ChillerOperatingPoints))
-                GROUP BY YEAR(Timestamp), MONTH(Timestamp)
-                ORDER BY Year, Month
-            """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
             
-            df = pd.read_sql(query, conn, params=(equipment_id, -months))
-        else:
-            df = pd.DataFrame()
-        
-        conn.close()
-        
-        return df
+            # Calculate age and degradation rate
+            age_years = (datetime.now() - install_date).days / 365.25
+            
+            if baseline_efficiency > 0:
+                degradation_rate = ((baseline_efficiency - current_efficiency) / baseline_efficiency * 100) / age_years if age_years > 0 else 0
+            else:
+                degradation_rate = 0
+            
+            # Check if record exists
+            cursor.execute("""
+            SELECT degradation_id FROM ltm_equipment_degradation
+            WHERE equipment_id = ?
+            """, (equipment_id,))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update
+                cursor.execute("""
+                UPDATE ltm_equipment_degradation
+                SET 
+                    current_age_years = ?,
+                    current_efficiency = ?,
+                    degradation_rate_percent_per_year = ?,
+                    updated_at = ?
+                WHERE equipment_id = ?
+                """, (
+                    age_years,
+                    current_efficiency,
+                    degradation_rate,
+                    datetime.now(),
+                    equipment_id
+                ))
+            else:
+                # Insert
+                cursor.execute("""
+                INSERT INTO ltm_equipment_degradation (
+                    equipment_id, equipment_type, install_date,
+                    current_age_years, baseline_efficiency,
+                    current_efficiency, degradation_rate_percent_per_year
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    equipment_id,
+                    equipment_type,
+                    install_date.date(),
+                    age_years,
+                    baseline_efficiency,
+                    current_efficiency,
+                    degradation_rate
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM degradation tracking error: {e}")
     
-    def get_historical_pue_trend(
+    def get_equipment_degradation(
         self,
-        months: int = 12
-    ) -> pd.DataFrame:
+        equipment_id: str
+    ) -> Optional[Dict]:
         """
-        Get PUE trend over time
+        Get equipment degradation data
         
         Args:
-            months: Months to retrieve
+            equipment_id: Equipment identifier
         
         Returns:
-            Monthly PUE statistics
+            Degradation data
         """
         
-        conn = self.get_connection()
-        
-        query = """
-            SELECT 
-                YEAR(Timestamp) AS Year,
-                MONTH(Timestamp) AS Month,
-                AVG(PUE) AS AvgPUE,
-                MIN(PUE) AS MinPUE,
-                MAX(PUE) AS MaxPUE,
-                AVG(WeatherNormalizedPUE) AS AvgWeatherNormalizedPUE
-            FROM SystemPerformanceMetrics
-            WHERE Timestamp >= DATEADD(MONTH, ?, (SELECT MAX(Timestamp) FROM SystemPerformanceMetrics))
-            GROUP BY YEAR(Timestamp), MONTH(Timestamp)
-            ORDER BY Year, Month
-        """
-        
-        df = pd.read_sql(query, conn, params=(-months,))
-        conn.close()
-        
-        return df
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT equipment_type, install_date, current_age_years,
+                   baseline_efficiency, current_efficiency,
+                   degradation_rate_percent_per_year
+            FROM ltm_equipment_degradation
+            WHERE equipment_id = ?
+            """, (equipment_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return {
+                    'equipment_type': row[0],
+                    'install_date': row[1],
+                    'current_age_years': row[2],
+                    'baseline_efficiency': row[3],
+                    'current_efficiency': row[4],
+                    'degradation_rate_percent_per_year': row[5]
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"  Warning: LTM degradation retrieval error: {e}")
+            return None
     
-    def get_incident_history(
+    def record_proven_strategy(
         self,
-        equipment_type: Optional[str] = None,
-        months: int = 12
-    ) -> pd.DataFrame:
+        strategy_name: str,
+        strategy_type: str,
+        success: bool,
+        savings_kw: float,
+        conditions: Dict
+    ):
         """
-        Get historical alarm/incident data
+        Record outcome of optimization strategy
         
         Args:
-            equipment_type: Filter by equipment type
-            months: Months to retrieve
-        
-        Returns:
-            Incident history
+            strategy_name: Strategy name
+            strategy_type: Strategy type
+            success: Was it successful?
+            savings_kw: Energy savings achieved
+            conditions: Conditions under which strategy was applied
         """
         
-        conn = self.get_connection()
-        
-        if equipment_type:
-            query = """
-                SELECT 
-                    Timestamp,
-                    EquipmentID,
-                    EquipmentType,
-                    AlarmCode,
-                    AlarmDescription,
-                    AlarmSeverity,
-                    DATEDIFF(MINUTE, Timestamp, ClearedTime) AS DurationMinutes
-                FROM EquipmentAlarms
-                WHERE EquipmentType = ?
-                  AND Timestamp >= DATEADD(MONTH, ?, (SELECT MAX(Timestamp) FROM EquipmentAlarms))
-                ORDER BY Timestamp DESC
-            """
-            df = pd.read_sql(query, conn, params=(equipment_type, -months))
-        else:
-            query = """
-                SELECT 
-                    Timestamp,
-                    EquipmentID,
-                    EquipmentType,
-                    AlarmCode,
-                    AlarmDescription,
-                    AlarmSeverity,
-                    DATEDIFF(MINUTE, Timestamp, ClearedTime) AS DurationMinutes
-                FROM EquipmentAlarms
-                WHERE Timestamp >= DATEADD(MONTH, ?, (SELECT MAX(Timestamp) FROM EquipmentAlarms))
-                ORDER BY Timestamp DESC
-            """
-            df = pd.read_sql(query, conn, params=(-months,))
-        
-        conn.close()
-        
-        return df
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Check if strategy exists
+            cursor.execute("""
+            SELECT strategy_id, success_count, total_attempts,
+                   avg_savings_kw
+            FROM ltm_proven_strategies
+            WHERE strategy_name = ?
+            """, (strategy_name,))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update
+                strategy_id = existing[0]
+                success_count = existing[1] + (1 if success else 0)
+                total_attempts = existing[2] + 1
+                old_avg_savings = existing[3] or 0
+                
+                # Rolling average for savings
+                new_avg_savings = ((old_avg_savings * existing[2]) + savings_kw) / total_attempts
+                success_rate = (success_count / total_attempts) * 100
+                
+                cursor.execute("""
+                UPDATE ltm_proven_strategies
+                SET 
+                    success_count = ?,
+                    total_attempts = ?,
+                    success_rate = ?,
+                    avg_savings_kw = ?,
+                    applicable_conditions = ?,
+                    updated_at = ?
+                WHERE strategy_id = ?
+                """, (
+                    success_count,
+                    total_attempts,
+                    success_rate,
+                    new_avg_savings,
+                    json.dumps(conditions),
+                    datetime.now(),
+                    strategy_id
+                ))
+            else:
+                # Insert
+                cursor.execute("""
+                INSERT INTO ltm_proven_strategies (
+                    strategy_name, strategy_type,
+                    success_count, total_attempts,
+                    success_rate, avg_savings_kw,
+                    applicable_conditions
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    strategy_name,
+                    strategy_type,
+                    1 if success else 0,
+                    1,
+                    100.0 if success else 0.0,
+                    savings_kw,
+                    json.dumps(conditions)
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM strategy recording error: {e}")
     
-    def get_compliance_history(self) -> Dict:
-        """
-        Get compliance audit history
-        
-        Returns:
-            Summary of compliance status
-        """
-        
-        # In production, this would query a compliance audit table
-        # For now, return placeholder
-        
-        return {
-            'last_audit_date': 'N/A',
-            'compliance_status': 'COMPLIANT',
-            'areas_of_concern': []
-        }
-    
-    def calculate_baseline_comparison(
+    def get_proven_strategies(
         self,
-        current_value: float,
-        metric: str,
-        month: int
-    ) -> Dict:
+        min_success_rate: float = 70.0,
+        min_attempts: int = 3
+    ) -> List[Dict]:
         """
-        Compare current value to seasonal baseline
+        Get proven optimization strategies
         
         Args:
-            current_value: Current metric value
-            metric: Metric name
-            month: Current month
+            min_success_rate: Minimum success rate (%)
+            min_attempts: Minimum number of attempts
         
         Returns:
-            Comparison results
+            List of proven strategies
         """
         
-        baseline = self.get_seasonal_baseline(month, metric)
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            SELECT strategy_name, strategy_type, success_rate,
+                   avg_savings_kw, total_attempts, applicable_conditions
+            FROM ltm_proven_strategies
+            WHERE success_rate >= ? AND total_attempts >= ?
+            ORDER BY success_rate DESC, avg_savings_kw DESC
+            """, (min_success_rate, min_attempts))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            strategies = []
+            for row in rows:
+                strategies.append({
+                    'strategy_name': row[0],
+                    'strategy_type': row[1],
+                    'success_rate': row[2],
+                    'avg_savings_kw': row[3],
+                    'total_attempts': row[4],
+                    'applicable_conditions': json.loads(row[5]) if row[5] else {}
+                })
+            
+            return strategies
+            
+        except Exception as e:
+            print(f"  Warning: LTM strategy retrieval error: {e}")
+            return []
+    
+    def record_major_event(
+        self,
+        event_type: str,
+        description: str,
+        impact: str,
+        lessons_learned: str
+    ):
+        """
+        Record major event for future reference
         
-        if not baseline:
-            return {
-                'comparison': 'NO_BASELINE',
-                'deviation': None
-            }
+        Args:
+            event_type: Event type (FAILURE, UPGRADE, ANOMALY, etc.)
+            description: Event description
+            impact: Impact description
+            lessons_learned: Lessons learned
+        """
         
-        baseline_value = baseline.get('Baseline', current_value)
-        std_dev = baseline.get('StdDev', 0)
-        
-        deviation = current_value - baseline_value
-        
-        if std_dev > 0:
-            z_score = deviation / std_dev
-        else:
-            z_score = 0
-        
-        if abs(z_score) < 1:
-            status = 'NORMAL'
-        elif abs(z_score) < 2:
-            status = 'CAUTION'
-        else:
-            status = 'ABNORMAL'
-        
-        return {
-            'current_value': current_value,
-            'baseline': baseline_value,
-            'deviation': deviation,
-            'z_score': z_score,
-            'status': status,
-            'comparison': f"{'Above' if deviation > 0 else 'Below'} baseline by {abs(deviation):.3f}"
-        }
-
-
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+            INSERT INTO ltm_major_events (
+                event_date, event_type, event_description,
+                impact_description, lessons_learned
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """, (
+                datetime.now(),
+                event_type,
+                description,
+                impact,
+                lessons_learned
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            print(f"  Warning: LTM event recording error: {e}")
 # Singleton instance
 long_term_memory = LongTermMemory()
-
-# Test
-if __name__ == "__main__":
-    
-    print("="*70)
-    print("TESTING LONG-TERM MEMORY")
-    print("="*70)
-    
-    # Test 1: Seasonal baseline
-    print("\n[TEST 1] Seasonal Baseline (current month)...")
-    current_month = 10  # Data is from October 2025
-    baseline = long_term_memory.get_seasonal_baseline(current_month, 'PUE')
-
-    if baseline:
-        print(f"  Baseline PUE: {baseline.get('Baseline') or 0:.3f}")
-        print(f"  Best: {baseline.get('Best') or 0:.3f}")
-        print(f"  Worst: {baseline.get('Worst') or 0:.3f}")
-    
-    # Test 2: Equipment lifecycle
-    print("\n[TEST 2] Equipment Lifecycle Data...")
-    lifecycle = long_term_memory.get_equipment_lifecycle_data('Chiller-1')
-    
-    if lifecycle:
-        print(f"  Install Date: {lifecycle.get('InstallDate')}")
-        print(f"  Maintenance Events: {lifecycle.get('total_maintenance_events', 0)}")
-    
-    # Test 3: PUE trend
-    print("\n[TEST 3] PUE Trend (last 6 months)...")
-    pue_trend = long_term_memory.get_historical_pue_trend(months=6)
-    
-    if not pue_trend.empty:
-        print(f"  Data points: {len(pue_trend)}")
-        print(pue_trend[['Year', 'Month', 'AvgPUE']].head())
-    
-    print("\n✅ Long-term memory tests complete!")
