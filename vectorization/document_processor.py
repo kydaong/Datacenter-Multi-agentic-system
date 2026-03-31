@@ -180,7 +180,7 @@ if __name__ == "__main__":
     
     # Test single document (if exists)
     BASE_DIR = Path(__file__).parent.parent
-    test_file = BASE_DIR / "documents" / "SS 591 Redline Chilled Water System Efficiency (1).pdf"
+    test_file = BASE_DIR / "documents" / "manuals" / "chillers" / "SS 591 Redline Chilled Water System Efficiency (1).pdf"
 
     if test_file.exists():
         print(f"\nProcessing: {test_file.name}")

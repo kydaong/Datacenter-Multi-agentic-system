@@ -83,14 +83,6 @@ def batch_vectorize_all():
             'document_type': 'KPI',
             'equipment_type': 'general',
             'criticality': 'MEDIUM'
-        },
-        # All PDFs currently in documents root — treated as regulations/standards
-        {
-            'directory': str(BASE_DIR / 'documents'),
-            'collection': 'regulations',
-            'document_type': 'REGULATION',
-            'equipment_type': 'general',
-            'criticality': 'HIGH'
         }
     ]
     
