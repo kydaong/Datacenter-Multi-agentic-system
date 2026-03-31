@@ -22,11 +22,13 @@ try:
     from orchestrator.medium_term_memory import medium_term_memory
     from orchestrator.short_term_memory import short_term_memory
     from orchestrator.long_term_memory import long_term_memory
+    from orchestrator.live_data import live_data
 except ImportError:
     from qdrant_interface import qdrant
     from medium_term_memory import medium_term_memory
     from short_term_memory import short_term_memory
     from long_term_memory import long_term_memory
+    from live_data import live_data
 
 load_dotenv()
 
@@ -201,12 +203,16 @@ class BaseAgent(ABC):
     
     def get_current_metrics(self) -> Dict:
         """
-        Get current system metrics from short-term memory
-        
+        Get current system metrics from live AOM-Dev data
+
         Returns:
             Current metrics dictionary
         """
-        
+
+        metrics = live_data.get_current_metrics()
+        if metrics:
+            return metrics
+        # Fallback to short-term memory if DB unavailable
         state = self.short_term_memory.get_current_state()
         return state.get('state', {}) if state else {}
     

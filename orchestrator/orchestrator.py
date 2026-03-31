@@ -3,6 +3,7 @@ Main Orchestrator
 Human-facing interface that coordinates all 6 agents
 Manages debate protocol and presents results to humans for approval
 Handles human "nudge" requests for alternative solutions
+Provides complete debate visibility
 """
 
 import sys
@@ -27,6 +28,7 @@ from .short_term_memory import ShortTermMemory
 from .medium_term_memory import MediumTermMemory
 from .long_term_memory import LongTermMemory
 from .learning_tracker import LearningTracker
+from .live_data import live_data
 
 
 class Orchestrator:
@@ -41,6 +43,7 @@ class Orchestrator:
     - Build consensus or escalate conflicts
     - Present final decision to human for approval/rejection
     - Handle human "nudge" for alternative solutions
+    - Provide complete debate visibility (round-by-round)
     - Execute approved decisions via MCP servers
     - Log complete conversation history
     - Track learning and improvement
@@ -49,7 +52,7 @@ class Orchestrator:
     1. Human → Orchestrator: Query or context
     2. Orchestrator → Agents: Run debate
     3. Orchestrator → Human: Present decision for approval
-    4. Human → Orchestrator: Approve/Reject/Nudge
+    4. Human → Orchestrator: Approve/Reject/Nudge/View Debate
     5. Orchestrator → Systems: Execute if approved
     """
     
@@ -352,12 +355,301 @@ class Orchestrator:
             execution_result=execution_result
         )
         
-        # Update short-term memory
-        # (Mark decision as executed)
-        
         print("\n✅ Execution complete")
         
         return execution_result
+    
+    def get_debate_details(self, session_id: str) -> Dict:
+        """
+        Get complete debate details for a session
+        
+        Args:
+            session_id: Session ID to retrieve
+        
+        Returns:
+            Complete debate breakdown by round
+        """
+        
+        print("\n" + "="*70)
+        print(f"📜 DEBATE DETAILS - SESSION: {session_id}")
+        print("="*70)
+        
+        # Load session from database
+        session = self.decision_logger.load_session(session_id)
+        
+        if not session:
+            return {
+                'error': 'Session not found',
+                'session_id': session_id
+            }
+        
+        # Parse rounds
+        rounds = session.get('rounds', [])
+        conversation_log = session.get('conversation_log', [])
+        
+        debate_details = {
+            'session_id': session_id,
+            'start_time': session.get('start_time'),
+            'end_time': session.get('end_time'),
+            'human_input': session.get('human_input'),
+            'context': session.get('context'),
+            'rounds': [],
+            'full_conversation_log': conversation_log,
+            'summary': self._create_debate_summary(rounds, session.get('consensus_result', {}))
+        }
+        
+        # Process each round
+        for round_data in rounds:
+            round_details = self._format_round_details(round_data, conversation_log)
+            debate_details['rounds'].append(round_details)
+        
+        return debate_details
+    
+    def display_debate(self, session_id: str):
+        """
+        Display debate in human-readable format
+        
+        Args:
+            session_id: Session ID to display
+        """
+        
+        debate = self.get_debate_details(session_id)
+        
+        if 'error' in debate:
+            print(f"\n❌ Error: {debate['error']}")
+            return
+        
+        print(f"\n📅 Session: {debate['session_id']}")
+        print(f"🕐 Start: {debate['start_time']}")
+        print(f"🕑 End: {debate['end_time']}")
+        
+        if debate['human_input']:
+            print(f"\n💬 Human Input: {debate['human_input']}")
+        
+        print(f"\n📊 Context:")
+        context = debate['context']
+        print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
+        print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
+        print(f"  • PUE: {context.get('current_pue', 'N/A')}")
+        print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
+        
+        # Display each round
+        for round_detail in debate['rounds']:
+            self._print_round(round_detail)
+        
+        # Display summary
+        print("\n" + "="*70)
+        print("📋 DEBATE SUMMARY")
+        print("="*70)
+        
+        summary = debate['summary']
+        print(f"\n🎯 Final Decision: {summary['final_decision']}")
+        print(f"🤝 Consensus Type: {summary['consensus_type']}")
+        print(f"📊 Support Level: {summary['support_percentage']:.0f}%")
+        print(f"🎲 Confidence: {summary['confidence']:.2f}")
+        
+        if summary.get('vetoes'):
+            print(f"\n⛔ Vetoes:")
+            for veto in summary['vetoes']:
+                print(f"  • {veto['agent']}: {veto['reasoning']}")
+        
+        if summary.get('key_arguments'):
+            print(f"\n💡 Key Arguments:")
+            for i, arg in enumerate(summary['key_arguments'][:3], 1):
+                print(f"  {i}. {arg}")
+    
+    def _format_round_details(self, round_data: Dict, conversation_log: List[Dict]) -> Dict:
+        """
+        Format round details for display
+        
+        Args:
+            round_data: Raw round data
+            conversation_log: Full conversation log
+        
+        Returns:
+            Formatted round details
+        """
+        
+        round_num = round_data.get('round', 0)
+        phase = round_data.get('phase', 'UNKNOWN')
+        
+        formatted = {
+            'round_number': round_num,
+            'phase': phase,
+            'timestamp': round_data.get('timestamp'),
+            'agents_participated': [],
+            'proposals': [],
+            'responses': [],
+            'votes': [],
+            'summary': ''
+        }
+        
+        # Round 1: Initial Proposals
+        if round_num == 1:
+            proposals = round_data.get('proposals', [])
+            for prop in proposals:
+                formatted['proposals'].append({
+                    'agent': prop.get('agent', 'Unknown'),
+                    'action_type': prop.get('action_type', 'UNKNOWN'),
+                    'description': prop.get('description', ''),
+                    'justification': prop.get('justification', ''),
+                    'predicted_savings': prop.get('predicted_savings', {}),
+                    'confidence': prop.get('confidence', 0)
+                })
+                formatted['agents_participated'].append(prop.get('agent'))
+            
+            formatted['summary'] = f"{len(proposals)} proposals submitted"
+        
+        # Round 2: Responses
+        elif round_num == 2:
+            responses = round_data.get('responses', [])
+            for resp in responses:
+                agent = resp.get('agent', 'Unknown')
+                formatted['agents_participated'].append(agent)
+                
+                for response in resp.get('responses_to_proposals', []):
+                    formatted['responses'].append({
+                        'responding_agent': agent,
+                        'responding_to': response.get('proposal_by', 'Unknown'),
+                        'stance': response.get('stance', 'NEUTRAL'),
+                        'comment': response.get('comment', '')
+                    })
+            
+            formatted['summary'] = f"{len(formatted['responses'])} responses exchanged"
+        
+        # Round 3: Refinements
+        elif round_num == 3:
+            refined = round_data.get('refined_positions', [])
+            for ref in refined:
+                agent = ref.get('agent', 'Unknown')
+                formatted['agents_participated'].append(agent)
+                
+                formatted['proposals'].append({
+                    'agent': agent,
+                    'position_changed': ref.get('position_changed', False),
+                    'updated_position': ref.get('updated_position', ''),
+                    'support_received': ref.get('support_percentage', 0)
+                })
+            
+            changed_count = sum(1 for r in refined if r.get('position_changed'))
+            formatted['summary'] = f"{changed_count} agents refined positions"
+        
+        # Round 4: Final Vote
+        elif round_num == 4:
+            votes = round_data.get('votes', [])
+            primary_proposal = round_data.get('primary_proposal', {})
+            
+            formatted['primary_proposal'] = {
+                'action_type': primary_proposal.get('action_type', 'UNKNOWN'),
+                'proposed_by': primary_proposal.get('agent', 'Unknown'),
+                'description': primary_proposal.get('description', '')
+            }
+            
+            for vote in votes:
+                formatted['votes'].append({
+                    'agent': vote.get('agent', 'Unknown'),
+                    'vote': vote.get('vote', 'UNKNOWN'),
+                    'reasoning': vote.get('reasoning', ''),
+                    'confidence': vote.get('confidence', 0)
+                })
+                formatted['agents_participated'].append(vote.get('agent'))
+            
+            approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
+            formatted['summary'] = f"{approve_count}/{len(votes)} agents approved"
+        
+        return formatted
+    
+    def _print_round(self, round_detail: Dict):
+        """
+        Print round details in readable format
+        
+        Args:
+            round_detail: Formatted round data
+        """
+        
+        print("\n" + "="*70)
+        print(f"ROUND {round_detail['round_number']}: {round_detail['phase']}")
+        print("="*70)
+        print(f"Summary: {round_detail['summary']}")
+        
+        # Round 1: Proposals
+        if round_detail['round_number'] == 1:
+            for prop in round_detail['proposals']:
+                print(f"\n🤖 {prop['agent']}:")
+                print(f"   Action: {prop['action_type']}")
+                print(f"   Description: {prop['description']}")
+                if prop.get('justification'):
+                    print(f"   Justification: {prop['justification'][:150]}...")
+                if prop.get('predicted_savings'):
+                    print(f"   Predicted Savings: {prop['predicted_savings']}")
+                print(f"   Confidence: {prop.get('confidence', 0):.2f}")
+        
+        # Round 2: Responses
+        elif round_detail['round_number'] == 2:
+            for resp in round_detail['responses']:
+                print(f"\n💬 {resp['responding_agent']} → {resp['responding_to']}:")
+                print(f"   Stance: {resp['stance']}")
+                print(f"   Comment: {resp['comment']}")
+        
+        # Round 3: Refinements
+        elif round_detail['round_number'] == 3:
+            for prop in round_detail['proposals']:
+                print(f"\n🔄 {prop['agent']}:")
+                if prop['position_changed']:
+                    print(f"   ✓ Position refined")
+                    print(f"   Updated: {prop['updated_position']}")
+                else:
+                    print(f"   ○ Position unchanged")
+                print(f"   Support: {prop['support_received']:.0f}%")
+        
+        # Round 4: Votes
+        elif round_detail['round_number'] == 4:
+            print(f"\n📋 Primary Proposal:")
+            pp = round_detail.get('primary_proposal', {})
+            print(f"   {pp.get('action_type', 'UNKNOWN')} by {pp.get('proposed_by', 'Unknown')}")
+            print(f"   {pp.get('description', '')}")
+            
+            print(f"\n🗳️  Votes:")
+            for vote in round_detail['votes']:
+                vote_symbol = "✓" if vote['vote'] in ['APPROVE', 'APPROVE_WITH_CONDITIONS'] else "✗"
+                print(f"   {vote_symbol} {vote['agent']}: {vote['vote']}")
+                print(f"      {vote['reasoning']}")
+    
+    def _create_debate_summary(self, rounds: List[Dict], consensus_result: Dict) -> Dict:
+        """
+        Create debate summary
+        
+        Args:
+            rounds: All round data
+            consensus_result: Consensus result
+        
+        Returns:
+            Summary dictionary
+        """
+        
+        decision = consensus_result.get('decision', {})
+        
+        summary = {
+            'final_decision': decision.get('action_type', 'UNKNOWN'),
+            'consensus_type': consensus_result.get('consensus_type', 'UNKNOWN'),
+            'support_percentage': consensus_result.get('support_percentage', 0),
+            'confidence': consensus_result.get('confidence', 0),
+            'vetoes': consensus_result.get('vetoes', []),
+            'key_arguments': []
+        }
+        
+        # Extract key arguments from Round 1
+        if rounds and len(rounds) > 0:
+            round_1 = rounds[0]
+            proposals = round_1.get('proposals', [])
+            
+            for prop in proposals:
+                if prop.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']:
+                    summary['key_arguments'].append(
+                        f"{prop.get('agent', 'Unknown')}: {prop.get('description', '')}"
+                    )
+        
+        return summary
     
     def _parse_nudge_intent(self, nudge_feedback: str) -> str:
         """
@@ -438,9 +730,8 @@ class Orchestrator:
             # Alternative Options (if any)
             'alternatives': self._extract_alternatives(debate_result),
             
-            # Full Debate Transcript (for deep dive)
-            'debate_transcript_summary': self._summarize_debate(debate_result),
-            'full_debate_log': debate_result['conversation_log'],
+            # Debate summary
+            'debate_summary': self._summarize_debate(debate_result),
             
             # Execution Plan (if approved)
             'execution_plan': self._create_execution_plan(decision),
@@ -450,6 +741,7 @@ class Orchestrator:
                 'can_approve': True,
                 'can_reject': True,
                 'can_nudge': True,
+                'can_view_debate': True,
                 'nudge_suggestions': [
                     "Give me a more conservative option",
                     "Show me alternatives that prioritize cost",
@@ -463,12 +755,6 @@ class Orchestrator:
     
     def _requires_human_approval(self, consensus_result: Dict) -> bool:
         """Determine if human approval required"""
-        
-        # Require human approval if:
-        # 1. Low confidence (<0.70)
-        # 2. Any veto present
-        # 3. Weak consensus or conflict
-        # 4. High risk actions
         
         if consensus_result['confidence'] < 0.70:
             return True
@@ -490,45 +776,44 @@ class Orchestrator:
         
         arguments = []
         
-        # Get proposals from Round 1
-        for proposal in debate_result['rounds'][0]['proposals']:
-            if proposal.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']:
-                arguments.append({
-                    'agent': proposal.get('agent', 'Unknown'),
-                    'position': proposal.get('description', ''),
-                    'justification': proposal.get('justification', '')[:200]  # Truncate
-                })
+        if 'rounds' in debate_result and len(debate_result['rounds']) > 0:
+            for proposal in debate_result['rounds'][0].get('proposals', []):
+                if proposal.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']:
+                    arguments.append({
+                        'agent': proposal.get('agent', 'Unknown'),
+                        'position': proposal.get('description', ''),
+                        'justification': proposal.get('justification', '')[:200]
+                    })
         
-        return arguments[:5]  # Top 5
+        return arguments[:5]
     
     def _extract_risks(self, debate_result: Dict) -> List[str]:
         """Extract risks identified during debate"""
         
         risks = []
         
-        # Scan all rounds for risk mentions
-        for round_data in debate_result['rounds']:
+        for round_data in debate_result.get('rounds', []):
             for proposal in round_data.get('proposals', []):
                 justification = proposal.get('justification', '').lower()
                 if any(word in justification for word in ['risk', 'concern', 'warning', 'danger']):
                     risk_text = proposal.get('justification', '')[:150]
                     risks.append(f"{proposal.get('agent', 'Unknown')}: {risk_text}")
         
-        return risks[:5]  # Top 5
+        return risks[:5]
     
     def _extract_alternatives(self, debate_result: Dict) -> List[Dict]:
         """Extract alternative proposals from debate"""
         
         alternatives = []
         
-        # Get all non-monitoring proposals from Round 1
-        for proposal in debate_result['rounds'][0]['proposals']:
-            if proposal.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']:
-                alternatives.append({
-                    'proposed_by': proposal.get('agent', 'Unknown'),
-                    'action': proposal.get('action_type'),
-                    'description': proposal.get('description', '')
-                })
+        if 'rounds' in debate_result and len(debate_result['rounds']) > 0:
+            for proposal in debate_result['rounds'][0].get('proposals', []):
+                if proposal.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']:
+                    alternatives.append({
+                        'proposed_by': proposal.get('agent', 'Unknown'),
+                        'action': proposal.get('action_type'),
+                        'description': proposal.get('description', '')
+                    })
         
         return alternatives
     
@@ -537,14 +822,13 @@ class Orchestrator:
         
         summary_lines = []
         
-        for round_data in debate_result['rounds']:
-            round_num = round_data['round']
-            phase = round_data['phase']
+        for round_data in debate_result.get('rounds', []):
+            round_num = round_data.get('round', 0)
+            phase = round_data.get('phase', 'UNKNOWN')
             
             summary_lines.append(f"\nRound {round_num} ({phase}):")
             
             if round_num == 1:
-                # Initial proposals
                 proposals = round_data.get('proposals', [])
                 for p in proposals:
                     action = p.get('action_type', 'UNKNOWN')
@@ -552,9 +836,8 @@ class Orchestrator:
                     summary_lines.append(f"  • {agent}: {action}")
             
             elif round_num == 4:
-                # Final votes
                 votes = round_data.get('votes', [])
-                approve_count = sum(1 for v in votes if v.get('vote') == 'APPROVE')
+                approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
                 summary_lines.append(f"  • Votes: {approve_count}/{len(votes)} approved")
         
         return "\n".join(summary_lines)
@@ -590,7 +873,7 @@ class Orchestrator:
         - NotificationServer for alerts
         - DataIngestionServer for logging
         
-        Simulated for now - would be replaced with actual MCP calls
+        Simulated for now
         """
         
         consensus_result = decision.get('consensus_result', {})
@@ -601,7 +884,6 @@ class Orchestrator:
         if approval_notes:
             print(f"  📝 Notes: {approval_notes}")
 
-        # Simulate execution steps
         execution_steps = [
             'Validating N+1 redundancy...',
             'Checking safety interlocks...',
@@ -613,9 +895,8 @@ class Orchestrator:
 
         for step in execution_steps:
             print(f"  • {step}")
-            time.sleep(0.3)  # Simulate work
+            time.sleep(0.3)
 
-        # Simulate execution result
         execution_result = {
             'status': 'SUCCESS',
             'executed_at': datetime.now().isoformat(),
@@ -664,27 +945,22 @@ if __name__ == "__main__":
     
     # Initialize orchestrator
     orchestrator = Orchestrator()
-    
-    # Example scenario: Morning peak hour
-    context = {
-        'cooling_load_kw': 2800,
-        'it_load_kw': 9500,
-        'total_facility_power_kw': 11800,
-        'wet_bulb_temp': 25.5,
-        'dry_bulb_temp': 31.0,
-        'humidity_percent': 78,
-        'chillers_online': ['Chiller-1', 'Chiller-2'],
-        'current_pue': 1.24,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    # Human query
+
+    # Fetch live context from AOM-Dev
+    print("\n[CONTEXT] Fetching live system context from AOM-Dev...")
+    context = live_data.get_current_context()
+    print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
+    print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
+    print(f"  • PUE: {context.get('current_pue', 'N/A')}")
+    print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
+    print(f"  • Chillers online: {context.get('chillers_online_count', 'N/A')}")
+
     human_input = "System seems to be running well. Any optimization opportunities?"
     
     # Run analysis
     decision = orchestrator.analyze_and_propose(context, human_input)
     
-    # Display decision to human
+    # Display decision
     print("\n" + "="*70)
     print("📊 DECISION PACKAGE FOR HUMAN")
     print("="*70)
@@ -695,13 +971,12 @@ if __name__ == "__main__":
     print(f"🤝 Consensus: {decision['executive_summary']['consensus_strength']}")
     print(f"👥 Agent Support: {decision['agent_consensus']['support_level']}")
     
-    if decision['predicted_impact']:
-        print(f"\n📈 Predicted Impact:")
-        for key, value in decision['predicted_impact'].items():
-            print(f"  • {key}: {value}")
-    
-    print(f"\n Requires Approval: {decision['executive_summary']['requires_human_approval']}")
+    # Display debate
+    print("\n" + "="*70)
+    print("🗣️  VIEWING DEBATE DETAILS")
+    print("="*70)
+    orchestrator.display_debate(decision['session_id'])
     
     print("\n" + "="*70)
-    print("ORCHESTRATOR TEST COMPLETE")
+    print("✅ ORCHESTRATOR TEST COMPLETE")
     print("="*70)

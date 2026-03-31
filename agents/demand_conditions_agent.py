@@ -443,8 +443,11 @@ Provide forecasts in JSON with:
         # Check for load spikes
         high_severity_anomalies = [a for a in anomalies if a['severity'] == 'HIGH']
         if high_severity_anomalies:
-            # If spike in next 2 hours, recommend pre-staging
-            early_spikes = [a for a in high_severity_anomalies if a['hours_ahead'] <= 2]
+            # If spike (not drop) in next 2 hours, recommend pre-staging
+            early_spikes = [
+                a for a in high_severity_anomalies
+                if a['hours_ahead'] <= 2 and a['type'] == 'LOAD_SPIKE'
+            ]
             if early_spikes:
                 recommendations['pre_stage_chiller'] = True
                 recommendations['details'].append({
@@ -498,8 +501,10 @@ Provide forecasts in JSON with:
     
     def _propose_pre_staging(self, analysis: Dict) -> Dict:
         """Propose pre-staging chiller for predicted load spike"""
-        
+
         anomalies = [a for a in analysis['anomalies'] if a['type'] == 'LOAD_SPIKE']
+        if not anomalies:
+            return self._create_monitoring_update(analysis)
         spike = anomalies[0]
         
         confidence = self.calculate_confidence(

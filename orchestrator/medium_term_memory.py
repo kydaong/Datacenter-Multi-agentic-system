@@ -366,8 +366,35 @@ class MediumTermMemory:
             ORDER BY record_date DESC
             """
 
-            df = pd.read_sql(query, conn, params=(cutoff_date.date(), load_min, load_max))
+            cursor = conn.cursor()
+            cursor.execute(query, (cutoff_date.date(), load_min, load_max))
+            cols = [c[0] for c in cursor.description]
+            rows = cursor.fetchall()
             conn.close()
+            df = pd.DataFrame(
+                [list(row) for row in rows],
+                columns=cols
+            )
+
+            # If MAGS table is empty, pull from live AOM-Dev data instead
+            if df.empty:
+                try:
+                    from live_data import live_data as _live_data
+                except ImportError:
+                    try:
+                        from orchestrator.live_data import live_data as _live_data
+                    except ImportError:
+                        _live_data = None
+
+                if _live_data is not None:
+                    rows = _live_data.get_similar_conditions(
+                        cooling_load_kw=cooling_load_kw,
+                        wet_bulb_temp=wet_bulb_temp,
+                        days=days,
+                        tolerance_pct=tolerance_percent
+                    )
+                    if rows:
+                        df = pd.DataFrame(rows)
 
             return df
 
