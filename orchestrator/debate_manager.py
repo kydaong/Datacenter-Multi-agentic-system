@@ -27,16 +27,18 @@ class DebateManager:
     Uses Claude API for natural language generation
     """
     
-    def __init__(self, agents: List):
+    def __init__(self, agents: List, stream_callback=None):
         """
         Initialize debate manager
-        
+
         Args:
             agents: List of all agent instances
+            stream_callback: Optional callable(event_dict) for real-time streaming
         """
         self.agents = agents
         self.max_rounds = 4
-        
+        self.stream_callback = stream_callback
+
         # Initialize Claude client for conversational responses
         self.claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.claude_model = "claude-sonnet-4-6"
@@ -76,21 +78,25 @@ class DebateManager:
         
         # Round 1: Initial proposals
         print("\n[ROUND 1/4] Collecting initial proposals...")
+        self._emit_round_marker(1, "Initial Proposals")
         round_1_result = self._run_round_1(context, debate_session)
         debate_session['rounds'].append(round_1_result)
-        
+
         # Round 2: Conversational responses and rebuttals
         print("\n[ROUND 2/4] Agent conversations and rebuttals...")
+        self._emit_round_marker(2, "Agent Responses")
         round_2_result = self._run_round_2_conversational(round_1_result, context, debate_session)
         debate_session['rounds'].append(round_2_result)
-        
+
         # Round 3: Consensus building with dialogue
         print("\n[ROUND 3/4] Building consensus through dialogue...")
+        self._emit_round_marker(3, "Consensus Building")
         round_3_result = self._run_round_3_conversational(round_1_result, round_2_result, context, debate_session)
         debate_session['rounds'].append(round_3_result)
-        
+
         # Round 4: Final vote
         print("\n[ROUND 4/4] Final vote...")
+        self._emit_round_marker(4, "Final Vote")
         round_4_result = self._run_round_4(debate_session)
         debate_session['rounds'].append(round_4_result)
         
@@ -747,6 +753,14 @@ Cast your vote now as {agent.agent_name}:"""
         
         return f"[PROPOSAL] {action_type}: {description}"
     
+    def _emit_round_marker(self, round_num: int, label: str):
+        """Emit an explicit round-start marker to the UI stream."""
+        if self.stream_callback:
+            self.stream_callback({
+                '__round__': round_num,
+                'label': label
+            })
+
     def _log_message(
         self,
         debate_session: Dict,
@@ -779,4 +793,11 @@ Cast your vote now as {agent.agent_name}:"""
             print(f"  │  {line}")
         print(f"  └─────────────────────────────")
 
-        
+        # Stream to UI if callback registered
+        if self.stream_callback:
+            self.stream_callback({
+                'speaker': speaker,
+                'message': message,
+                'timestamp': timestamp.isoformat()
+            })
+

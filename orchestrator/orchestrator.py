@@ -677,6 +677,88 @@ class Orchestrator:
         else:
             return 'GENERAL_REFINEMENT'
     
+    def _extract_full_conversation_log(self, debate_result: Dict) -> List[Dict]:
+        """
+        Extract complete conversation log for UI display
+        Returns list of messages in chronological order for frontend
+        """
+        
+        conversation_log = []
+        
+        for round_data in debate_result.get('rounds', []):
+            round_num = round_data.get('round', 0)
+            phase = round_data.get('phase', 'UNKNOWN')
+            
+            # Round header
+            conversation_log.append({
+                'speaker': 'System',
+                'message': f'━━━ ROUND {round_num}: {phase} ━━━',
+                'type': 'system',
+                'round': round_num,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            # Round 1: Initial proposals
+            if round_num == 1:
+                proposals = round_data.get('proposals', [])
+                for prop in proposals:
+                    agent = prop.get('agent', 'Unknown Agent')
+                    action_type = prop.get('action_type', 'UNKNOWN')
+                    description = prop.get('description', '')
+                    justification = prop.get('justification', '')
+                    
+                    message = f"[PROPOSAL] {action_type}"
+                    if description:
+                        message += f": {description}"
+                    if justification:
+                        message += f"\n\n{justification}"
+                    
+                    conversation_log.append({
+                        'speaker': agent,
+                        'message': message,
+                        'type': 'proposal',
+                        'round': round_num,
+                        'timestamp': datetime.now().isoformat()
+                    })
+            
+            # Round 2 & 3: Conversational responses
+            elif round_num in [2, 3]:
+                responses = round_data.get('responses', [])
+                for resp in responses:
+                    agent = resp.get('agent', 'Unknown Agent')
+                    response_text = resp.get('response_text', '')
+                    
+                    if response_text:  # Only add if there's actual content
+                        conversation_log.append({
+                            'speaker': agent,
+                            'message': response_text,
+                            'type': 'response',
+                            'round': round_num,
+                            'timestamp': datetime.now().isoformat()
+                        })
+            
+            # Round 4: Final votes
+            elif round_num == 4:
+                votes = round_data.get('votes', [])
+                for vote in votes:
+                    agent = vote.get('agent', 'Unknown Agent')
+                    vote_decision = vote.get('vote', 'UNKNOWN')
+                    reasoning = vote.get('reasoning', '')
+                    
+                    message = f"[VOTE: {vote_decision}]"
+                    if reasoning:
+                        message += f"\n\n{reasoning}"
+                    
+                    conversation_log.append({
+                        'speaker': agent,
+                        'message': message,
+                        'type': 'vote',
+                        'round': round_num,
+                        'timestamp': datetime.now().isoformat()
+                    })
+        
+        return conversation_log
+    
     def _format_for_human(
         self,
         session_id: str,
@@ -730,8 +812,11 @@ class Orchestrator:
             # Alternative Options (if any)
             'alternatives': self._extract_alternatives(debate_result),
             
-            # Debate summary
+            # Debate summary (text)
             'debate_summary': self._summarize_debate(debate_result),
+            
+            # ✅ NEW: Full conversation log for UI
+            'full_conversation_log': self._extract_full_conversation_log(debate_result),
             
             # Execution Plan (if approved)
             'execution_plan': self._create_execution_plan(decision),

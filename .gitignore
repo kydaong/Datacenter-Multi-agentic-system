@@ -1,7 +1,6 @@
-# -----------------------------
-# Python
-# -----------------------------
-__pycache__/
+
+## Python
+_pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -13,128 +12,89 @@ __pycache__/
 dist/
 build/
 *.spec
-
-# -----------------------------
-# Virtual Environments
-# -----------------------------
+## Virtual Environments
 .env
 .venv
 venv/
 ENV/
 env.bak/
 venv.bak/
-
-# -----------------------------
-# Package & Dependency Tools
-# -----------------------------
+## Package & Dependency Tools
 pip-wheel-metadata/
 pip-log.txt
 poetry.lock
 poetry.toml
-
-# -----------------------------
-# Jupyter
-# -----------------------------
+## Jupyter
 .ipynb_checkpoints/
 *.ipynb
-
-# -----------------------------
-# Logs & Temp Files
-# -----------------------------
+## Logs & Temp Files
 *.log
 *.tmp
 *.temp
 logs/
 cache/
 .DS_Store
-
-# -----------------------------
-# Environment & Secrets
-# -----------------------------
+## Environment & Secrets
 *.env
 *.env.*
 .env.local
 secrets.json
 config.yaml
 credentials.json
-
-# -----------------------------
-# FastAPI / Uvicorn
-# -----------------------------
+## FastAPI / Uvicorn
 *.db
 *.sqlite
 __uvicorn__
 uvicorn.log
-
-# -----------------------------
-# ML / AI Artifacts
-# -----------------------------
+## ML / AI Artifacts
 # PyTorch
 *.pt
 *.pth
 *.bin
-
 # HuggingFace & Transformers
 huggingface/
 hf_cache/
 transformers_cache/
-
 # SentenceTransformers
 sentence_transformers/
 st_cache/
-
 # LangChain
 langchain.db
 .lc_cache/
 .vectorstore/
-
 # Qdrant (local storage)
 qdrant/
 qdrant_storage/
 qdrant_data/
-
-# -----------------------------
-# Document Processing Leftovers
-# -----------------------------
+## Document Processing Leftovers
 *.pdf.txt
 *.pdf.out
 *__extracted/
 extracted_pages/
 output_docs/
 temp_docs/
-
 # Unstructured
 unstructured_data/
 unstructured_output/
-
-# -----------------------------
-# Data files (optional)
-# -----------------------------
+# Data files 
 data/
 datasets/
 *.csv
 *.parquet
 *.xlsx
-
-# -----------------------------
-# IDE / Editor
-# -----------------------------
+## IDE / Editor
 # VSCode
 .vscode/
 .code-workspace
-
 # PyCharm
 .idea/
-
 # Mac
 .DS_Store
 .AppleDouble
 .LSOverride
-
 # Windows
 Thumbs.db
 desktop.ini
-
 *.csv
 *.pdf
 *.js
@@ -145,6 +105,277 @@ desktop.ini
 *.svg
 *.css
 *.ico
+## react modules gitignore
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+# C extensions
+*.so
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+PIPFILE.lock
+# PyInstaller
+*.manifest
+*.spec
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+# Translations
+*.mo
+*.pot
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+# Flask stuff:
+instance/
+.webassets-cache
+# Scrapy stuff:
+.scrapy
+# Sphinx documentation
+docs/_build/
+# PyBuilder
+.pybuilder/
+target/
+# Jupyter Notebook
+.ipynb_checkpoints
+# IPython
+profile_default/
+ipython_config.py
+# pyenv
+.python-version
+# pipenv
+Pipfile.lock
+# poetry
+poetry.lock
+# PEP 582
+__pypackages__/
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+# SageMath parsed files
+*.sage.py
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+## NODE / REACT
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+# Testing
+/coverage
+# Production
+/build
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+##DATABASES
+# SQL Server
+*.mdf
+*.ldf
+*.bak
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+# PostgreSQL
+*.sql
+
+##MACHINE LEARNING / AI
+# Models
+*.h5
+*.pkl
+*.pickle
+*.joblib
+*.ckpt
+*.pth
+*.pt
+*.pb
+*.onnx
+*.tflite
+saved_models/
+checkpoints/
+models/weights/
+mlruns/
+# Data files
+*.csv
+*.tsv
+*.parquet
+*.feather
+data/raw/
+data/processed/
+data/interim/
+*.npy
+*.npz
+# Qdrant
+.qdrant/
+qdrant_storage/
+# Vector databases
+*.index
+*.faiss
+## AZURE / CLOUD
+# Azure
+.azure/
+*.azurePubxml
+# AWS
+.aws/
+# GCP
+.gcp/
+## LOGS & TEMP FILES
+# Log files
+*.log
+logs/
+*.out
+*.err
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+## IDE & EDITORS
+# VSCode
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+## DOCKER
+.dockerignore
+docker-compose.override.yml
+## CREDENTIALS & SECRETS
+# Environment variables
+.env
+.env.*
+*.env
+# API keys & secrets
+secrets/
+*.key
+*.pem
+*.cert
+*.crt
+credentials.json
+service-account.json
+# Configuration with sensitive data
+config/local.py
+config/production.py
+settings/local.py
+## PROJECT SPECIFIC - MAGS
+# MAGS specific data
+/data/telemetry/
+/data/historical/
+/data/forecasts/
+# SQL Server connection strings
+appsettings.json
+connection_strings.json
+# Agent logs
+/logs/agents/
+/logs/debates/
+/logs/decisions/
+# Memory databases
+/memory/short_term.db
+/memory/medium_term.db
+/memory/long_term.db
+# MCP server data
+/mcp_servers/data/
+## BUILD ARTIFACTS
+# Python builds
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-wheel-metadata/
+# Node builds
+build/
+dist/
+out/
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+## DOCUMENTATION
+#Generated docs (keep source, ignore builds)
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+## TESTING
+#Test coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+## Test outputs
+test-results/
+test-reports/
+## MISC
+# Windows
+Desktop.ini
+$RECYCLE.BIN/
+# Linux
+.directory
+.Trash-*
+*.jsx
 
 
 
