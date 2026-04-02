@@ -148,8 +148,7 @@ Provide proposals in JSON with:
         # Search knowledge base
         sop_results = self.search_knowledge(
             query="pump VFD optimization delta-T control",
-            knowledge_type="sops",
-            filters={'equipment_type': 'pump'}
+            knowledge_type="sops"
         )
         
         return {

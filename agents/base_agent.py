@@ -365,8 +365,7 @@ class ExampleAgent(BaseAgent):
         # Search knowledge base
         sop_results = self.search_knowledge(
             query="chiller staging procedure",
-            knowledge_type="sops",
-            filters={'equipment_type': 'chiller'}
+            knowledge_type="sops"
         )
         
         # Find historical precedents

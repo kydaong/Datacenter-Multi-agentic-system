@@ -69,9 +69,10 @@ class OperationsSafetyAgent(BaseAgent):
         }
         
         # N+1 redundancy requirements
+        # Chiller-1: 1000t, Chiller-2: 1000t, Chiller-3: 500t (total 2500t)
         self.redundancy_requirements = {
-            'chiller_capacity_tons': 1100,  # Total installed: Chiller-1 (400) + Chiller-2 (400) + Chiller-3 (300)
-            'min_online_capacity_tons': 800,  # Must maintain N+1
+            'chiller_capacity_tons': 2500,
+            'min_online_capacity_tons': 1500,  # Must maintain N+1
             'min_chillers_online': 2  # Absolute minimum
         }
     
@@ -222,23 +223,22 @@ VETO immediately if:
     
     def _verify_n_plus_1_redundancy(self, metrics: Dict, context: Dict) -> Dict:
         """Verify N+1 redundancy is maintained"""
-        
-        # Get current cooling load
-        cooling_load_tons = context.get('cooling_load_tons', 800)
-        
+
+        # Convert kW to tons if tons not provided (1 ton = 3.517 kW)
+        cooling_load_tons = context.get('cooling_load_tons',
+            context.get('cooling_load_kw', 2800) / 3.517)
+
         # Get online chillers (simulated)
         chillers_online = context.get('chillers_online', ['Chiller-1', 'Chiller-2'])
-        
+
+        # Chiller capacities in tons (consistent with ChillerOptimizationAgent)
+        chiller_capacities = {'Chiller-1': 1000, 'Chiller-2': 1000, 'Chiller-3': 500}
+
         # Calculate online capacity
-        online_capacity = 0
-        for chiller in chillers_online:
-            if 'Chiller-3' in chiller:
-                online_capacity += 300
-            else:
-                online_capacity += 400
-        
-        # Verify N+1: Online capacity must exceed load + largest unit
-        largest_unit = 400 if len([c for c in chillers_online if 'Chiller-3' not in c]) > 0 else 300
+        online_capacity = sum(chiller_capacities.get(c, 1000) for c in chillers_online)
+
+        # Verify N+1: Online capacity must exceed load + largest online unit
+        largest_unit = max((chiller_capacities.get(c, 1000) for c in chillers_online), default=1000)
         required_capacity = cooling_load_tons + largest_unit
         
         compliant = online_capacity >= required_capacity
@@ -420,24 +420,20 @@ VETO immediately if:
         # Critical check for chiller staging
         if action_type == 'CHILLER_STAGING':
             proposed_staging = proposal.get('proposed_staging', [])
-            
+
             if len(proposed_staging) < self.redundancy_requirements['min_chillers_online']:
                 return {
                     'passed': False,
                     'reason': f"Proposed staging ({len(proposed_staging)} chillers) violates minimum {self.redundancy_requirements['min_chillers_online']} chillers online requirement"
                 }
-            
-            # Calculate proposed capacity
-            proposed_capacity = 0
-            for chiller in proposed_staging:
-                if 'Chiller-3' in chiller:
-                    proposed_capacity += 300
-                else:
-                    proposed_capacity += 400
-            
+
+            # Calculate proposed capacity using consistent chiller sizes
+            chiller_capacities = {'Chiller-1': 1000, 'Chiller-2': 1000, 'Chiller-3': 500}
+            proposed_capacity = sum(chiller_capacities.get(c, 1000) for c in proposed_staging)
+
             # Check against N+1 requirement
             cooling_load = analysis['redundancy_status']['cooling_load_tons']
-            largest_unit = 400
+            largest_unit = max((chiller_capacities.get(c, 1000) for c in proposed_staging), default=1000)
             required_capacity = cooling_load + largest_unit
             
             if proposed_capacity < required_capacity:

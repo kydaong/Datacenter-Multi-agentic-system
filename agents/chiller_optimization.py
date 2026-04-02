@@ -144,8 +144,7 @@ Provide proposals in structured JSON with:
         # Search knowledge base for staging guidelines
         sop_results = self.search_knowledge(
             query="chiller staging optimization part load efficiency",
-            knowledge_type="sops",
-            filters={'equipment_type': 'chiller'}
+            knowledge_type="sops"
         )
         
         return {

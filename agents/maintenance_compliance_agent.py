@@ -166,8 +166,7 @@ Provide maintenance/compliance status in JSON with:
         # Search knowledge base
         sop_results = self.search_knowledge(
             query="preventive maintenance equipment health monitoring",
-            knowledge_type="sops",
-            filters={'equipment_type': 'chiller'}
+            knowledge_type="sops"
         )
         
         regulations = self.search_knowledge(

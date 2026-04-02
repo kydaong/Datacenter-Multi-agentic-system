@@ -107,17 +107,23 @@ class DebateManager:
     def _run_round_1(self, context: Dict, debate_session: Dict) -> Dict:
         """
         Round 1: Each agent proposes independently
-        
+
         All agents analyze situation in parallel and propose actions
         """
-        
+
+        # Inject human question into context so agents can factor it in
+        round_context = dict(context)
+        human_input = debate_session.get('human_input')
+        if human_input:
+            round_context['human_question'] = human_input
+
         proposals = []
-        
+
         for agent in self.agents:
             print(f"  → {agent.agent_name}...")
             
             try:
-                proposal = agent.propose_action(context)
+                proposal = agent.propose_action(round_context)
                 proposals.append(proposal)
                 
                 # Log to conversation
@@ -471,10 +477,12 @@ class DebateManager:
         conversation_history = self._build_conversation_context(debate_session)
         
         # Create voting prompt
+        human_question = debate_session.get('human_input', '')
         vote_prompt = self._create_vote_prompt(
             agent,
             primary_proposal,
-            conversation_history
+            conversation_history,
+            human_question=human_question
         )
         
         try:
@@ -533,8 +541,12 @@ class DebateManager:
             for p in debate_proposals
         ])
         
-        prompt = f"""You are participating in a collaborative optimization meeting for a chiller plant. This is Round 2 of the debate.
+        # Surface the human's question for context
+        human_question = context.get('human_question', '')
+        human_context_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
 
+        prompt = f"""You are participating in a collaborative optimization meeting for a chiller plant. This is Round 2 of the debate.
+{human_context_line}
 CONVERSATION SO FAR:
 {conversation_history}
 
@@ -606,12 +618,15 @@ Respond now as {agent.agent_name}:"""
         self,
         agent,
         primary_proposal: Dict,
-        conversation_history: str
+        conversation_history: str,
+        human_question: str = ''
     ) -> str:
         """Create prompt for Round 4 final vote"""
-        
-        prompt = f"""You are in the final round of a collaborative optimization meeting. Time to vote.
 
+        human_context_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
+
+        prompt = f"""You are in the final round of a collaborative optimization meeting. Time to vote.
+{human_context_line}
 CONVERSATION SO FAR:
 {conversation_history}
 
