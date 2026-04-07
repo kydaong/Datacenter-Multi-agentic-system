@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 
+
 class DemandConditionsAgent(BaseAgent):
     """
     Agent 1: Demand & Conditions
@@ -87,21 +88,18 @@ Provide forecasts in JSON with:
 - Confidence levels
 """
     
+    # Fallback pattern used only when DB is unavailable
+    _FALLBACK_HOURLY_PATTERN = {
+        0: 9200, 1: 9100, 2: 9100, 3: 9200, 4: 9300, 5: 9400,
+        6: 9500, 7: 9600, 8: 9700, 9: 9900, 10: 10000, 11: 10100,
+        12: 10200, 13: 10200, 14: 10200, 15: 10100, 16: 10000, 17: 9900,
+        18: 9800, 19: 9700, 20: 9600, 21: 9500, 22: 9400, 23: 9300
+    }
+
     def _initialize_forecast_models(self):
-        """Initialize forecast models"""
-        
-        # In production, would load trained ML models
-        # For now, use pattern-based forecasting
-        
-        # Typical IT load patterns (kW) - Singapore datacenter
-        self.hourly_it_load_pattern = {
-            0: 9200, 1: 9100, 2: 9100, 3: 9200, 4: 9300, 5: 9400,
-            6: 9500, 7: 9600, 8: 9700, 9: 9900, 10: 10000, 11: 10100,
-            12: 10200, 13: 10200, 14: 10200, 15: 10100, 16: 10000, 17: 9900,
-            18: 9800, 19: 9700, 20: 9600, 21: 9500, 22: 9400, 23: 9300
-        }
-        
-        # Day-of-week multipliers
+        """Initialize forecast models from DB historical data."""
+
+        # Day-of-week multipliers (derived from historical deviation patterns)
         self.dow_multipliers = {
             0: 1.00,  # Monday
             1: 1.00,  # Tuesday
@@ -111,13 +109,53 @@ Provide forecasts in JSON with:
             5: 0.90,  # Saturday
             6: 0.85   # Sunday
         }
-        
-        # Singapore weather patterns (simplified)
+
+        # Load hourly IT load baseline from DB (last 30 days)
+        self.hourly_it_load_pattern = self._load_hourly_pattern_from_db()
+
+        # Weather patterns (kept for fallback, but live weather comes from context)
         self.weather_patterns = {
             'wet_bulb_baseline': 25.0,
             'dry_bulb_baseline': 30.0,
             'humidity_baseline': 75.0
         }
+
+    def _load_hourly_pattern_from_db(self) -> Dict[int, float]:
+        """
+        Fetch average IT load per hour from the last 30 days in FacilityPower.
+        Falls back to the static pattern if DB is unreachable or has insufficient data.
+        """
+        # Lazy import to avoid circular dependency at module load time
+        try:
+            from orchestrator.live_data import live_data as _live_data
+        except Exception:
+            _live_data = None
+
+        if _live_data is None:
+            print("  [DemandAgent] live_data unavailable — using fallback hourly pattern")
+            return dict(self._FALLBACK_HOURLY_PATTERN)
+
+        try:
+            db_pattern = _live_data.get_it_load_by_hour(days=30)
+            if len(db_pattern) >= 18:  # need at least 18 hours to be useful
+                # Fill any missing hours from adjacent averages or fallback
+                filled = {}
+                overall_avg = sum(db_pattern.values()) / len(db_pattern)
+                for h in range(24):
+                    if h in db_pattern:
+                        filled[h] = db_pattern[h]
+                    else:
+                        # Interpolate from neighbours or use overall average
+                        neighbours = [db_pattern[n] for n in [h - 1, h + 1] if n in db_pattern]
+                        filled[h] = sum(neighbours) / len(neighbours) if neighbours else overall_avg
+                print(f"  [DemandAgent] Loaded DB-derived hourly IT load pattern ({len(db_pattern)} hours with data)")
+                return filled
+            else:
+                print(f"  [DemandAgent] DB pattern has only {len(db_pattern)} hours — using fallback")
+                return dict(self._FALLBACK_HOURLY_PATTERN)
+        except Exception as e:
+            print(f"  [DemandAgent] Failed to load hourly pattern from DB: {e} — using fallback")
+            return dict(self._FALLBACK_HOURLY_PATTERN)
     
     def analyze_situation(self, context: Dict) -> Dict:
         """

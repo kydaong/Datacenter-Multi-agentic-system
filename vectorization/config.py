@@ -14,6 +14,7 @@ class VectorizationConfig:
     # Qdrant settings
     QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
     QDRANT_PORT = int(os.getenv('QDRANT_PORT', 6333))
+    api_key = os.getenv('QDRANT_API_KEY')
     
     # Embedding model
     EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2')

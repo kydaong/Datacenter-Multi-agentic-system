@@ -18,21 +18,21 @@ def test_connection():
     print("SQL SERVER CONNECTION TEST")
     print("="*70)
     
-    # Get connection parameters from .env
-    driver = os.getenv('DB_DRIVER')
-    server = os.getenv('DB_SERVER')
-    port = os.getenv('DB_PORT')
-    database = os.getenv('DB_NAME')
-    user = os.getenv('DB_USER')
-    password = os.getenv('DB_PASSWORD') 
+    # Get connection parameters from .env   
+    driver = os.getenv('AZURE_DRIVER')
+    server = os.getenv('AZURE_SQL_SERVER')
+    #port = os.getenv('DB_PORT')
+    database = os.getenv('AZURE_SQL_DATABASE')
+    user = os.getenv('AZURE_SQL_USER')
+    password = os.getenv('AZURE_SQL_PWD') 
 
     if password and (';' in password or '{' in password or '}' in password):
         password = '{' + password + '}'
            
     print("\n[1] CONNECTION PARAMETERS:")
-    print(f"  Driver: {driver}")
+    print(f"  Driver: {{ODBC Driver 18 for SQL Server}}")
     print(f"  Server: {server}")
-    print(f"  Port: {port}")
+    #print(f"  Port: {port}")
     print(f"  Database: {database}")
     print(f"  User: {user}")
     print(f"  Password: {'*' * len(password) if password else '(empty)'}")
@@ -41,7 +41,7 @@ def test_connection():
     conn_str = (
         f"DRIVER={{{driver}}};"
         f"SERVER={server};"
-        f"DATABASE={database};"
+        #f"DATABASE={database};"
         f"UID={user};"
         f"PWD={password};"
         f"TrustServerCertificate=yes;"

@@ -116,13 +116,13 @@ Provide proposals in structured JSON with:
         
         # Get current metrics
         current_metrics = self.get_current_metrics()
-        
+
         # Get current cooling load
-        cooling_load_kw = context.get('cooling_load_kw', current_metrics.get('total_cooling_load_kw', 2800))
+        cooling_load_kw = context.get('cooling_load_kw', current_metrics.get('cooling_load_kw', 2800))
         cooling_load_tons = cooling_load_kw / 3.517
-        
-        # Get current staging
-        current_staging = self._get_current_staging(current_metrics)
+
+        # Get current staging (pass both metrics and context so live values are used)
+        current_staging = self._get_current_staging(current_metrics, context)
         
         # Get weather conditions (affects CW temp, efficiency)
         wet_bulb_temp = context.get('wet_bulb_temp', 25.0)
@@ -237,30 +237,34 @@ Provide proposals in structured JSON with:
         
         return proposal
     
-    def _get_current_staging(self, metrics: Dict) -> Dict:
-        """Extract current chiller staging from metrics"""
-        
-        # This would query actual system state
-        # For now, simulate based on typical operation
-        
-        chillers_online = metrics.get('chillers_online', 2)
-        
-        if chillers_online == 1:
-            active = ['Chiller-1']
-        elif chillers_online == 2:
-            active = ['Chiller-1', 'Chiller-2']
+    def _get_current_staging(self, metrics: Dict, context: Dict = None) -> Dict:
+        """Extract current chiller staging from live DB data"""
+
+        context = context or {}
+
+        # chillers_online is a list in the full context (from live_data.get_current_context)
+        chillers_online_list = context.get('chillers_online', [])
+        if isinstance(chillers_online_list, list) and chillers_online_list:
+            active = chillers_online_list
         else:
-            active = ['Chiller-1', 'Chiller-2', 'Chiller-3']
-        
-        total_power = metrics.get('total_chiller_power_kw', 900)
-        total_load_tons = metrics.get('total_cooling_load_tons', 800)
-        
+            # Fall back to count from context or metrics
+            count = context.get('chillers_online_count', 2)
+            active = [f'Chiller-{i+1}' for i in range(int(count))]
+
+        # cooling_system_power_kw is the correct key from get_current_metrics()
+        total_power = metrics.get('cooling_system_power_kw',
+                      context.get('cooling_system_power_kw', 900))
+
+        # cooling_load_tons is the correct key from get_current_metrics()
+        total_load_tons = metrics.get('cooling_load_tons',
+                          context.get('cooling_load_tons', 800))
+
         return {
             'chillers': active,
             'count': len(active),
             'total_power_kw': total_power,
             'total_load_tons': total_load_tons,
-            'avg_kw_per_ton': total_power / total_load_tons if total_load_tons > 0 else 0.55
+            'avg_kw_per_ton': total_power / total_load_tons if total_load_tons else 0.55
         }
     
     def _evaluate_staging_options(

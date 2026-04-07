@@ -1581,18 +1581,19 @@ def insert_to_sqlserver(data_dict):
     
 
     # Connection string
+
     conn_str = (
-        f"DRIVER={{{os.getenv('DB_DRIVER', 'ODBC Driver 17 for SQL Server')}}};"
-        f"SERVER={os.getenv('DB_SERVER', 'localhost')};"
-        f"DATABASE={os.getenv('DB_NAME', 'ChillerOptimizationDB')};"
-        f"UID={os.getenv('DB_USER', 'sa')};"
-        f"PWD={{{os.getenv('DB_PASSWORD')}}};"
-        f"TrustServerCertificate=yes;"
-    )
+    f"DRIVER={{{os.getenv('AZURE_DRIVER', 'ODBC Driver 18 for SQL Server')}}};"
+    f"SERVER={os.getenv('AZURE_SQL_SERVER', 'localhost')};"
+    f"DATABASE={os.getenv('AZURE_SQL_DATABASE', 'ChillerOptimizationDB')};"
+    f"UID={os.getenv('AZURE_SQL_USER', 'sa')};"
+    f"PWD={os.getenv('AZURE_SQL_PWD')};"
+    f"Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+)
     
     print(f"\nConnecting to SQL Server...")
-    print(f"  Server: {os.getenv('DB_SERVER', 'localhost')}")
-    print(f"  Database: {os.getenv('DB_NAME', 'ChillerOptimizationDB')}")
+    print(f"  Server: {os.getenv('AZURE_SQL_SERVER', 'localhost')}")
+    print(f"  Database: {os.getenv('AZURE_SQL_DATABASE', 'ChillerOptimizationDB')}")
     
     try:
         conn = pyodbc.connect(conn_str)

@@ -123,45 +123,64 @@ class Orchestrator:
     def analyze_and_propose(
         self,
         context: Dict,
-        human_input: Optional[str] = None
+        human_input: Optional[str] = None,
+        prior_summary: Optional[str] = None
     ) -> Dict:
         """
         Main entry point: Analyze situation and propose actions
-        
+
         This is what humans call to get recommendations
-        
+
         Args:
             context: Current system state (telemetry, forecasts, etc.)
             human_input: Optional human query or concern
-        
+            prior_summary: Summary of previous debate (for follow-up questions)
+
         Returns:
             Final decision package ready for human approval/rejection
         """
         
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         print("\n" + "="*70)
         print(f"NEW ANALYSIS SESSION: {session_id}")
         print("="*70)
-        
+
         if human_input:
             print(f"\n💬 Human Input: {human_input}")
-        
-        print(f"\n📊 System Context:")
+
+        # ── Merge live DB telemetry into context ────────────────────────────
+        # Frontend sends a baseline context; override with real-time DB values
+        # so agents reason on actual plant state, not hardcoded UI defaults.
+        print("\n[LIVE DATA] Fetching real-time system context from DB...")
+        try:
+            live_context = live_data.get_current_context()
+            if live_context:
+                # Live DB values win; keep any frontend keys not in DB (e.g. human_question)
+                merged = {**context, **{k: v for k, v in live_context.items() if v is not None}}
+                context = merged
+                print(f"  ✅ Live context loaded — {len(live_context)} fields from DB")
+            else:
+                print("  ⚠️  Live context empty, using frontend context as-is")
+        except Exception as e:
+            print(f"  ⚠️  Live data fetch failed ({e}), using frontend context as-is")
+
+        print(f"\n📊 System Context (live):")
         print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
         print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
         print(f"  • PUE: {context.get('current_pue', 'N/A')}")
         print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
-        
+        print(f"  • Chillers online: {context.get('chillers_online', 'N/A')}")
+
         # Store system state
         self.short_term_memory.store_system_state(context)
-        
+
         # Start 4-round debate
         print("\n" + "-"*70)
         print("🗣️  INITIATING 4-ROUND AGENT DEBATE")
         print("-"*70)
-        
-        debate_result = self.debate_manager.run_debate(context, human_input)
+
+        debate_result = self.debate_manager.run_debate(context, human_input, prior_context=prior_summary)
         
         # Build consensus
         print("\n" + "-"*70)

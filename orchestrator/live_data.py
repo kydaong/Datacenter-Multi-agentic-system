@@ -22,12 +22,31 @@ class LiveDataFetcher:
 
     def __init__(self, connection_string: Optional[str] = None):
 
-        self.connection_string = connection_string or (
-            "DRIVER={ODBC Driver 17 for SQL Server};"
-            "SERVER=localhost\\SQLEXPRESS;"
-            "DATABASE=AOM-Dev;"
-            "Trusted_Connection=yes;"
-        )
+        if connection_string is None:
+            driver   = os.getenv('AZURE_DRIVER', os.getenv('DB_DRIVER', 'ODBC Driver 17 for SQL Server'))
+            server   = os.getenv('AZURE_SQL_SERVER', os.getenv('DB_SERVER', r'localhost\SQLEXPRESS'))
+            database = os.getenv('AZURE_SQL_DATABASE', os.getenv('DB_NAME', 'AOM-Dev'))
+            user     = os.getenv('AZURE_SQL_USER', os.getenv('DB_USER'))
+            password = os.getenv('AZURE_SQL_PWD', os.getenv('DB_PASSWORD'))
+            if user and password:
+                if ';' in password or '{' in password or '}' in password:
+                    password = '{' + password + '}'
+                connection_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={server};"
+                    f"DATABASE={database};"
+                    f"UID={user};"
+                    f"PWD={password};"
+                    f"TrustServerCertificate=yes;"
+                )
+            else:
+                connection_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={server};"
+                    f"DATABASE={database};"
+                    f"Trusted_Connection=yes;"
+                )
+        self.connection_string = connection_string
 
     def _get_connection(self):
         return pyodbc.connect(self.connection_string)
@@ -154,6 +173,95 @@ class LiveDataFetcher:
         except Exception as e:
             print(f"  Warning: get_chiller_telemetry error: {e}")
             return []
+
+    def get_pump_telemetry(self, pump_id: Optional[str] = None) -> List[Dict]:
+        """Latest telemetry for all pumps or a specific pump"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if pump_id:
+                cursor.execute("""
+                    SELECT TOP 1 * FROM PumpTelemetry
+                    WHERE PumpID = ?
+                    ORDER BY Timestamp DESC
+                """, (pump_id,))
+            else:
+                cursor.execute("""
+                    SELECT t.* FROM PumpTelemetry t
+                    INNER JOIN (
+                        SELECT PumpID, MAX(Timestamp) AS MaxTS
+                        FROM PumpTelemetry
+                        GROUP BY PumpID
+                    ) latest ON t.PumpID = latest.PumpID AND t.Timestamp = latest.MaxTS
+                    ORDER BY t.PumpID
+                """)
+            cols = [c[0] for c in cursor.description]
+            rows = [self._clean_row(dict(zip(cols, row))) for row in cursor.fetchall()]
+            conn.close()
+            return rows
+        except Exception as e:
+            print(f"  Warning: get_pump_telemetry error: {e}")
+            return []
+
+    def get_tower_telemetry(self, tower_id: Optional[str] = None) -> List[Dict]:
+        """Latest telemetry for all cooling towers or a specific tower"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if tower_id:
+                cursor.execute("""
+                    SELECT TOP 1 * FROM CoolingTowerTelemetry
+                    WHERE TowerID = ?
+                    ORDER BY Timestamp DESC
+                """, (tower_id,))
+            else:
+                cursor.execute("""
+                    SELECT t.* FROM CoolingTowerTelemetry t
+                    INNER JOIN (
+                        SELECT TowerID, MAX(Timestamp) AS MaxTS
+                        FROM CoolingTowerTelemetry
+                        GROUP BY TowerID
+                    ) latest ON t.TowerID = latest.TowerID AND t.Timestamp = latest.MaxTS
+                    ORDER BY t.TowerID
+                """)
+            cols = [c[0] for c in cursor.description]
+            rows = [self._clean_row(dict(zip(cols, row))) for row in cursor.fetchall()]
+            conn.close()
+            return rows
+        except Exception as e:
+            print(f"  Warning: get_tower_telemetry error: {e}")
+            return []
+
+    def get_it_load_by_hour(self, days: int = 30) -> Dict[int, float]:
+        """
+        Get average IT load (kW) per hour of day from the last N days.
+        Used by DemandConditionsAgent to replace hardcoded hourly patterns.
+        Returns a dict {hour(0-23): avg_kw} — empty dict on failure.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DATEPART(hour, Timestamp) AS Hour,
+                       AVG(CAST(ITLoadPowerKW AS float)) AS AvgLoad,
+                       COUNT(*) AS SampleCount
+                FROM FacilityPower
+                WHERE Timestamp >= DATEADD(DAY, ?, GETDATE())
+                  AND ITLoadPowerKW IS NOT NULL
+                  AND ITLoadPowerKW > 0
+                GROUP BY DATEPART(hour, Timestamp)
+                ORDER BY Hour
+            """, (-days,))
+            result = {}
+            for row in cursor.fetchall():
+                hour, avg_load, sample_count = row
+                if avg_load is not None and sample_count >= 3:
+                    result[int(hour)] = float(avg_load)
+            conn.close()
+            return result
+        except Exception as e:
+            print(f"  Warning: get_it_load_by_hour error: {e}")
+            return {}
 
     def get_similar_conditions(
         self,

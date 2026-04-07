@@ -14,10 +14,15 @@ import json
 import queue
 import threading
 import asyncio
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 
 # Add parent directory to path to import orchestrator
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load .env before anything else so ANTHROPIC_API_KEY and DB creds are available
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
 from orchestrator.orchestrator import Orchestrator
 
@@ -42,6 +47,7 @@ active_connections: List[WebSocket] = []
 class AnalyzeRequest(BaseModel):
     context: Dict
     human_input: Optional[str] = None
+    prior_summary: Optional[str] = None  # previous debate summary for follow-up questions
 
 
 class NudgeRequest(BaseModel):
@@ -64,7 +70,10 @@ async def root():
 @app.get("/status")
 async def get_status():
     """Get system status"""
-    return orchestrator.get_system_status()
+    try:
+        return orchestrator.get_system_status()
+    except Exception as e:
+        return {"status": "OPERATIONAL", "agents_online": 6, "error": str(e)}
 
 
 @app.post("/analyze")
@@ -203,7 +212,8 @@ async def analyze_stream(request: AnalyzeRequest):
         try:
             result = orchestrator.analyze_and_propose(
                 context=request.context,
-                human_input=request.human_input
+                human_input=request.human_input,
+                prior_summary=request.prior_summary
             )
             loop.call_soon_threadsafe(async_queue.put_nowait, {'__done__': True, 'decision': result})
         except Exception as e:
@@ -213,10 +223,17 @@ async def analyze_stream(request: AnalyzeRequest):
 
     threading.Thread(target=run_debate, daemon=True).start()
 
+    def _serialise(obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return float(obj)
+        raise TypeError(f"Object of type {type(obj)} is not JSON serialisable")
+
     async def event_generator():
         while True:
             event = await async_queue.get()
-            yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps(event, default=_serialise)}\n\n"
             if '__done__' in event or '__error__' in event:
                 break
 

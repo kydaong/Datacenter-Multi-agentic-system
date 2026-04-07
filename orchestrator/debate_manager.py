@@ -27,6 +27,24 @@ class DebateManager:
     Uses Claude API for natural language generation
     """
     
+    # Plant config injected into every Claude prompt so all agents reason correctly
+    PLANT_CONFIG = """
+CHILLER PLANT CONFIGURATION (authoritative — use these values, do not guess):
+  Chiller-1: 1000 tons rated capacity
+  Chiller-2: 1000 tons rated capacity
+  Chiller-3:  500 tons rated capacity
+  Total plant: 2500 tons
+
+N+1 REDUNDANCY RULE (correct formula):
+  If the largest running chiller trips, remaining online units must still cover full load.
+  Check: (online_capacity_tons - largest_online_unit_tons) >= cooling_load_tons
+  Examples:
+    2 chillers [C1+C2=2000T], load 800T  → remaining=1000T >= 800T  ✓ N+1 MAINTAINED
+    3 chillers [all=2500T],   load 1200T → remaining=1500T >= 1200T ✓ N+1 MAINTAINED
+    1 chiller  [C1=1000T],    load 800T  → remaining=0T    < 800T   ✗ N+1 VIOLATED
+    2 chillers [C1+C2=2000T], load 1100T → remaining=1000T < 1100T  ✗ N+1 VIOLATED
+"""
+
     def __init__(self, agents: List, stream_callback=None):
         """
         Initialize debate manager
@@ -46,27 +64,34 @@ class DebateManager:
     def run_debate(
         self,
         context: Dict,
-        human_input: Optional[str] = None
+        human_input: Optional[str] = None,
+        prior_context: Optional[str] = None
     ) -> Dict:
         """
         Run complete 4-round debate with natural conversations
-        
+
         Args:
             context: System state and telemetry
             human_input: Optional human query/guidance
-        
+            prior_context: Summary of the previous debate (for follow-up questions)
+
         Returns:
             Complete debate result with conversation log
         """
-        
+
+        # Pull recent memory context to ground the debate
+        memory_context = self._fetch_memory_context()
+
         debate_session = {
             'start_time': datetime.now().isoformat(),
             'context': context,
             'human_input': human_input,
+            'memory_context': memory_context,
+            'prior_context': prior_context,
             'rounds': [],
             'conversation_log': []
         }
-        
+
         # Add human input to conversation log
         if human_input:
             self._log_message(
@@ -106,14 +131,14 @@ class DebateManager:
     
     def _run_round_1(self, context: Dict, debate_session: Dict) -> Dict:
         """
-        Round 1: Each agent proposes independently
+        Round 1: Each agent proposes independently, grounded in the human question.
 
-        All agents analyze situation in parallel and propose actions
+        Analytical proposal provides structured data; Claude generates the
+        conversational message that directly addresses the human question.
         """
 
-        # Inject human question into context so agents can factor it in
         round_context = dict(context)
-        human_input = debate_session.get('human_input')
+        human_input = debate_session.get('human_input', '')
         if human_input:
             round_context['human_question'] = human_input
 
@@ -121,24 +146,28 @@ class DebateManager:
 
         for agent in self.agents:
             print(f"  → {agent.agent_name}...")
-            
+
             try:
                 proposal = agent.propose_action(round_context)
                 proposals.append(proposal)
-                
-                # Log to conversation
+
+                        # Generate a Claude-powered message that addresses the human question
+                spoken_message = self._generate_round1_llm_message(
+                    agent, proposal, human_input, round_context,
+                    memory_context=debate_session.get('memory_context', ''),
+                    prior_context=debate_session.get('prior_context', '')
+                )
+
                 self._log_message(
                     debate_session,
                     speaker=agent.agent_name,
-                    message=self._format_proposal_message(proposal),
+                    message=spoken_message,
                     timestamp=datetime.now(),
                     proposal=proposal
                 )
-                
-                # Print summary
-                action_type = proposal.get('action_type', 'UNKNOWN')
-                print(f"     Proposal: {action_type}")
-                
+
+                print(f"     Proposal: {proposal.get('action_type', 'UNKNOWN')}")
+
             except Exception as e:
                 print(f"     ERROR: {e}")
                 proposals.append({
@@ -146,13 +175,113 @@ class DebateManager:
                     'error': str(e),
                     'action_type': 'ERROR'
                 })
-        
+
         return {
             'round': 1,
             'phase': 'INITIAL_PROPOSALS',
             'proposals': proposals,
             'timestamp': datetime.now().isoformat()
         }
+
+    def _generate_round1_llm_message(
+        self,
+        agent,
+        proposal: Dict,
+        human_question: str,
+        context: Dict,
+        memory_context: str = '',
+        prior_context: str = ''
+    ) -> str:
+        """
+        Use Claude to generate a Round 1 proposal message that directly addresses
+        the human question, grounded in the analytical proposal from the agent.
+        """
+
+        action_type = proposal.get('action_type', 'MONITORING_UPDATE')
+        description = proposal.get('description', '')
+        justification = proposal.get('justification', '')
+        savings = proposal.get('predicted_savings', {})
+
+        # Build a compact context summary for Claude
+        ctx_summary = (
+            f"Cooling load: {context.get('cooling_load_kw', 'N/A')} kW | "
+            f"IT load: {context.get('it_load_kw', 'N/A')} kW | "
+            f"Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C | "
+            f"Chillers online: {context.get('chillers_online', 'N/A')} | "
+            f"PUE: {context.get('current_pue', 'N/A')}"
+        )
+
+        savings_summary = ""
+        if savings:
+            savings_summary = (
+                f"Predicted savings — Energy: {savings.get('energy_kw', 0):.1f} kW, "
+                f"Cost: SGD {savings.get('cost_sgd', 0):.2f}, "
+                f"PUE improvement: {savings.get('pue_improvement', 0):.4f}"
+            )
+
+        # Surface Qdrant evidence (SOPs, historical, regulations) from the proposal
+        evidence_summary = ""
+        evidence_list = proposal.get('evidence', [])
+        if evidence_list:
+            evidence_lines = []
+            for ev in evidence_list:
+                ev_type = ev.get('type', '')
+                ev_source = ev.get('source', '')
+                ev_data = ev.get('data', '')
+                if ev_type in ('SOP', 'HISTORICAL', 'REGULATION', 'MANUFACTURER', 'ANALYTICAL'):
+                    if isinstance(ev_data, list) and ev_data:
+                        snippet = str(ev_data[0])[:200]
+                    else:
+                        snippet = str(ev_data)[:200]
+                    evidence_lines.append(f"[{ev_type} | {ev_source}] {snippet}")
+            if evidence_lines:
+                evidence_summary = "SUPPORTING EVIDENCE FROM KNOWLEDGE BASE & HISTORY:\n" + "\n".join(evidence_lines)
+
+        human_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
+        memory_line = f"\n{memory_context}\n" if memory_context else ""
+        prior_line = (
+            f"\nPREVIOUS DEBATE OUTCOME (this is a FOLLOW-UP question — revise/build on this):\n{prior_context}\n"
+            if prior_context else ""
+        )
+
+        prompt = f"""You are {agent.agent_name} opening a 4-round expert debate about a chiller plant operation question.
+{human_line}
+{prior_line}
+{self.PLANT_CONFIG}
+LIVE SYSTEM STATE:
+{ctx_summary}
+{memory_line}
+YOUR ANALYTICAL ASSESSMENT:
+- Action type: {action_type}
+- Description: {description}
+- Justification: {justification}
+{savings_summary}
+
+{evidence_summary}
+
+YOUR TASK:
+Give your opening position as a domain expert directly responding to the human question above.
+- Ground your answer in the live system numbers, memory context, and evidence — do NOT invent values
+- If recent decisions show a similar action was taken recently, factor in cooldown constraints
+- Be specific to YOUR domain expertise (not generic)
+- Reference actual values (kW, temps, COP, run hours, PUE, etc.) from the live state
+- If the question is about powering down: address feasibility and risk from your perspective
+- If the question is about staging up: address readiness, capacity margins, and risks
+- 2-4 sentences, conversational but authoritative
+
+Respond now as {agent.agent_name}:"""
+
+        try:
+            message = self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=400,
+                system=agent.system_prompt,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text
+        except Exception as e:
+            print(f"     Warning: LLM error in Round 1 message: {e}")
+            return self._format_proposal_message(proposal)
     
     def _run_round_2_conversational(
         self,
@@ -406,23 +535,35 @@ class DebateManager:
         """
         Generate refined position through natural dialogue
         """
-        
+
+        human_question = debate_session.get('human_input', '')
+
         if not original_proposal or original_proposal.get('action_type') == 'MONITORING_UPDATE':
+            if human_question:
+                return {
+                    'agent': agent.agent_name,
+                    'position_changed': False,
+                    'response_text': (
+                        f"Regarding the question about '{human_question}': from my {agent.agent_role} "
+                        f"perspective, current parameters are nominal and no intervention is warranted at this time."
+                    )
+                }
             return {
                 'agent': agent.agent_name,
                 'position_changed': False,
-                'response_text': f"I maintain my position. The system is operating within normal parameters."
+                'response_text': "I maintain my position. The system is operating within normal parameters."
             }
-        
+
         # Build conversation context
         conversation_history = self._build_conversation_context(debate_session)
-        
+
         # Create refinement prompt
         refinement_prompt = self._create_refinement_prompt(
             agent,
             original_proposal,
             feedback_received,
-            conversation_history
+            conversation_history,
+            human_question=human_question
         )
         
         try:
@@ -546,6 +687,7 @@ class DebateManager:
         human_context_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
 
         prompt = f"""You are participating in a collaborative optimization meeting for a chiller plant. This is Round 2 of the debate.
+{self.PLANT_CONFIG}
 {human_context_line}
 CONVERSATION SO FAR:
 {conversation_history}
@@ -577,14 +719,17 @@ Respond now as {agent.agent_name}:"""
         agent,
         original_proposal: Dict,
         feedback_received: List[str],
-        conversation_history: str
+        conversation_history: str,
+        human_question: str = ''
     ) -> str:
         """Create prompt for Round 3 position refinement"""
-        
-        feedback_text = "\n".join([f"- {fb}" for fb in feedback_received]) if feedback_received else "No specific feedback received"
-        
-        prompt = f"""You are participating in Round 3 of a collaborative optimization meeting. Based on the discussion so far, you need to refine your position.
 
+        feedback_text = "\n".join([f"- {fb}" for fb in feedback_received]) if feedback_received else "No specific feedback received"
+        human_line = f"\nHUMAN QUESTION WE ARE ANSWERING: {human_question}\n" if human_question else ""
+
+        prompt = f"""You are participating in Round 3 of a collaborative optimization meeting. Based on the discussion so far, refine your position.
+{self.PLANT_CONFIG}
+{human_line}
 CONVERSATION SO FAR:
 {conversation_history}
 
@@ -595,23 +740,16 @@ FEEDBACK RECEIVED:
 {feedback_text}
 
 YOUR TASK:
-Based on the discussion and feedback, respond naturally:
+Keep the human question in mind — your refined position should move toward a concrete answer to it.
 
-1. If the feedback raises valid concerns, acknowledge them and adjust your position
-2. If your original position is still sound, reaffirm it with additional context
-3. If you see opportunities to incorporate others' ideas, suggest how to combine approaches
-4. Be open to collaboration while maintaining your domain expertise
+1. If feedback raises valid concerns, acknowledge and adjust
+2. If your position is sound, reaffirm it with additional reasoning tied to the human question
+3. Suggest how to combine approaches where applicable
 
-Be conversational. Use phrases like:
-- "After hearing everyone's input..."
-- "I see [Agent]'s point about..."
-- "I'd like to refine my recommendation to..."
-- "I still believe... because..."
+Use phrases like "After hearing everyone's input...", "I see [Agent]'s point...", "I'd refine my recommendation to..."
 
-Keep it focused (2-3 paragraphs).
+Keep it focused (2-3 paragraphs). Respond now as {agent.agent_name}:"""
 
-Respond now as {agent.agent_name}:"""
-        
         return prompt
     
     def _create_vote_prompt(
@@ -626,6 +764,7 @@ Respond now as {agent.agent_name}:"""
         human_context_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
 
         prompt = f"""You are in the final round of a collaborative optimization meeting. Time to vote.
+{self.PLANT_CONFIG}
 {human_context_line}
 CONVERSATION SO FAR:
 {conversation_history}
@@ -635,50 +774,83 @@ PRIMARY PROPOSAL:
 Description: {primary_proposal.get('description')}
 
 YOUR TASK:
-Cast your final vote and explain your reasoning briefly. Your vote must be ONE of:
-- APPROVE
-- APPROVE_WITH_CONDITIONS
-- REJECT
-- VETO (only if you have veto authority and there's a critical safety/compliance issue)
+Cast your final vote. Choose EXACTLY ONE of the following — your vote MUST be logically consistent with your reasoning:
+
+  APPROVE              — The proposal is safe and beneficial to execute RIGHT NOW.
+  APPROVE_WITH_CONDITIONS — The proposal is safe in principle BUT requires specific,
+                         measurable preconditions to be satisfied BEFORE execution.
+                         Use this ONLY when those conditions are realistic and clearly
+                         stated. Do NOT use this if the action itself violates safety
+                         or N+1 under current or foreseeable conditions.
+  REJECT               — The proposal should NOT be executed. Use this when the action
+                         is unsafe, not beneficial, or the risks outweigh the gains.
+                         If your reasoning says "not safe" → vote REJECT, not APPROVE_WITH_CONDITIONS.
+  VETO                 — Critical safety, N+1, or compliance violation. Overrides all
+                         other votes. Use only for your domain authority.
+
+CONSISTENCY RULE: If your reasoning concludes the action is unsafe or inadvisable, your
+vote MUST be REJECT or VETO — never APPROVE or APPROVE_WITH_CONDITIONS.
 
 Format your response as:
-VOTE: [your vote]
-REASONING: [1-2 sentences explaining your decision]
-
-Be direct and clear. Reference key points from the debate if relevant.
+VOTE: [APPROVE | APPROVE_WITH_CONDITIONS | REJECT | VETO]
+REASONING: [2-3 sentences. State the key facts from live data that drove your decision.]
 
 Cast your vote now as {agent.agent_name}:"""
         
         return prompt
     
     def _parse_vote_from_text(self, response_text: str, agent, primary_proposal: Dict) -> str:
-        """Parse vote value from natural language response"""
-        
+        """
+        Parse vote from response text.
+        Applies a consistency check: if reasoning contains strong unsafe signals,
+        override a permissive explicit vote (APPROVE / APPROVE_WITH_CONDITIONS) to REJECT.
+        """
         text_upper = response_text.upper()
-        
-        # Check for explicit vote declaration
+
+        # Detect strong "unsafe" signals in the reasoning text
+        unsafe_signals = [
+            'NOT SAFE', 'IS NOT SAFE', 'UNSAFE', 'N+1 VIOLATION', 'N+1 VIOLATED',
+            'CANNOT BE EXECUTED', 'SHOULD NOT BE EXECUTED', 'DO NOT EXECUTE',
+            'INADVISABLE', 'TOO RISKY', 'CRITICAL RISK'
+        ]
+        reasoning_says_unsafe = any(sig in text_upper for sig in unsafe_signals)
+
+        # Parse the explicit VOTE: line
+        parsed_vote = None
         if 'VOTE:' in text_upper:
-            vote_line = [line for line in response_text.split('\n') if 'VOTE:' in line.upper()][0]
-            if 'APPROVE WITH CONDITIONS' in vote_line.upper() or 'APPROVE_WITH_CONDITIONS' in vote_line.upper():
-                return 'APPROVE_WITH_CONDITIONS'
-            elif 'VETO' in vote_line.upper():
-                return 'VETO'
-            elif 'REJECT' in vote_line.upper():
-                return 'REJECT'
-            elif 'APPROVE' in vote_line.upper():
-                return 'APPROVE'
-        
-        # Infer from text sentiment
+            try:
+                vote_line = next(l for l in response_text.split('\n') if 'VOTE:' in l.upper())
+                if 'APPROVE_WITH_CONDITIONS' in vote_line.upper() or 'APPROVE WITH CONDITIONS' in vote_line.upper():
+                    parsed_vote = 'APPROVE_WITH_CONDITIONS'
+                elif 'VETO' in vote_line.upper():
+                    parsed_vote = 'VETO'
+                elif 'REJECT' in vote_line.upper():
+                    parsed_vote = 'REJECT'
+                elif 'APPROVE' in vote_line.upper():
+                    parsed_vote = 'APPROVE'
+            except StopIteration:
+                pass
+
+        # Consistency check: if reasoning says unsafe but vote is permissive → REJECT
+        if reasoning_says_unsafe and parsed_vote in ('APPROVE', 'APPROVE_WITH_CONDITIONS'):
+            print(f"     ⚠ Vote consistency override: reasoning says unsafe but vote was {parsed_vote} → REJECT")
+            return 'REJECT'
+
+        if parsed_vote:
+            return parsed_vote
+
+        # Fallback: infer from full text sentiment
         if 'veto' in text_upper or 'cannot approve' in text_upper:
-            return 'VETO' if agent.agent_name in ['Operations & Safety Agent', 'Maintenance & Compliance Agent', 'Energy & Cost Optimization Agent'] else 'REJECT'
-        elif 'reject' in text_upper or 'oppose' in text_upper:
+            return 'VETO' if agent.agent_name in [
+                'Operations & Safety Agent', 'Maintenance & Compliance Agent'
+            ] else 'REJECT'
+        elif 'reject' in text_upper or 'oppose' in text_upper or reasoning_says_unsafe:
             return 'REJECT'
         elif 'condition' in text_upper or 'provided that' in text_upper:
             return 'APPROVE_WITH_CONDITIONS'
         elif 'approve' in text_upper or 'support' in text_upper or 'agree' in text_upper:
             return 'APPROVE'
-        
-        # Default
+
         return 'APPROVE'
     
     def _generate_acknowledgment(self, agent, proposals: List[Dict]) -> str:
@@ -708,20 +880,27 @@ Cast your vote now as {agent.agent_name}:"""
         }
     
     def _build_conversation_context(self, debate_session: Dict) -> str:
-        """Build conversation history for context"""
-        
+        """Build conversation history for context, prepending prior debate if this is a follow-up."""
+
+        prior_context = debate_session.get('prior_context', '')
+        prior_block = (
+            f"=== PRIOR DEBATE OUTCOME (follow-up question — revise/build on this) ===\n{prior_context}\n"
+            f"=== NOW ADDRESSING NEW QUESTION ===\n\n"
+            if prior_context else ""
+        )
+
         conversation_log = debate_session.get('conversation_log', [])
-        
+
         # Get last 10 messages for context
         recent_messages = conversation_log[-10:] if len(conversation_log) > 10 else conversation_log
-        
+
         context_lines = []
         for msg in recent_messages:
             speaker = msg.get('speaker', 'Unknown')
             message = msg.get('message', '')
             context_lines.append(f"{speaker}: {message}")
-        
-        return "\n\n".join(context_lines)
+
+        return prior_block + "\n\n".join(context_lines)
     
     def _collect_feedback_for_agent(
         self,
@@ -768,6 +947,73 @@ Cast your vote now as {agent.agent_name}:"""
         
         return f"[PROPOSAL] {action_type}: {description}"
     
+    def _fetch_memory_context(self) -> str:
+        """
+        Pull recent decisions and proposals from short-term memory and
+        recent patterns from long-term memory to ground the debate.
+        Returns a formatted string injected into agent prompts.
+        """
+        lines = []
+
+        # Short-term: recent decisions (last 24h)
+        try:
+            from orchestrator.short_term_memory import short_term_memory
+        except ImportError:
+            try:
+                from short_term_memory import short_term_memory
+            except ImportError:
+                short_term_memory = None
+
+        if short_term_memory:
+            try:
+                recent_decisions = short_term_memory.get_recent_decisions(hours=24)
+                if recent_decisions:
+                    lines.append("RECENT DECISIONS (last 24h):")
+                    for d in recent_decisions[:5]:  # cap at 5
+                        dt = d.get('decision_time', '')
+                        dtype = d.get('decision_type', 'UNKNOWN')
+                        executed = 'executed' if d.get('executed') else 'pending'
+                        lines.append(f"  • [{dt}] {dtype} — {executed}")
+
+                recent_proposals = short_term_memory.get_recent_proposals(hours=6)
+                if recent_proposals:
+                    lines.append("RECENT AGENT PROPOSALS (last 6h):")
+                    for p in recent_proposals[:5]:
+                        agent = p.get('agent_name', '')
+                        atype = p.get('action_type', '')
+                        pt = p.get('proposal_time', '')
+                        lines.append(f"  • [{pt}] {agent}: {atype}")
+            except Exception as e:
+                print(f"  Warning: STM read error in memory context: {e}")
+
+        # Long-term: load learned patterns
+        try:
+            from orchestrator.long_term_memory import long_term_memory
+        except ImportError:
+            try:
+                from long_term_memory import long_term_memory
+            except ImportError:
+                long_term_memory = None
+
+        if long_term_memory:
+            try:
+                strategies = long_term_memory.get_proven_strategies(
+                    min_success_rate=70.0, min_attempts=3
+                )
+                if strategies:
+                    lines.append("PROVEN STRATEGIES (long-term memory):")
+                    for s in strategies[:3]:
+                        name = s.get('strategy_name', '')
+                        rate = s.get('success_rate', 0)
+                        savings = s.get('avg_savings_kw', 0)
+                        lines.append(f"  • {name} — {rate:.0f}% success, avg {savings:.0f} kW saved")
+            except Exception:
+                pass  # long-term memory read is best-effort
+
+        if lines:
+            return "\n".join(lines)
+        return ""
+
     def _emit_round_marker(self, round_num: int, label: str):
         """Emit an explicit round-start marker to the UI stream."""
         if self.stream_callback:

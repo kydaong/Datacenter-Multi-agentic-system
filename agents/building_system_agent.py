@@ -201,30 +201,36 @@ Provide proposals in JSON with:
         return max(proposals, key=lambda x: x['predicted_savings']['energy_kw'])
     
     def _analyze_pumps(self, cooling_load_kw: float, metrics: Dict) -> Dict:
-        """Analyze pump performance and optimization potential"""
-        
+        """Analyze pump performance and optimization potential using live DB data"""
+
         # Calculate required CHW flow
         # Q = Load / (ρ × Cp × ΔT)
         chw_delta_t = 5.5  # Target
         required_flow_lps = cooling_load_kw / (4.18 * chw_delta_t)
-        
-        # Current pump speeds (simulated)
-        current_speeds = {
-            'PCHWP-1': 75.0,
-            'PCHWP-2': 75.0,
-            'SCHWP-1': 70.0,
-            'SCHWP-2': 70.0,
-            'SCHWP-3': 70.0
-        }
-        
-        # Calculate current power
+
+        # Fetch live pump speeds from DB
+        pump_rows = self.live_data.get_pump_telemetry()
+        current_speeds = {}
+        if pump_rows:
+            for row in pump_rows:
+                pid = row.get('PumpID', '')
+                spd = row.get('VFDSpeedPercent')
+                if pid and spd is not None:
+                    current_speeds[pid] = float(spd)
+
+        # Fall back to representative defaults only if DB unavailable
+        if not current_speeds:
+            current_speeds = {
+                'PCHWP-1': 75.0, 'PCHWP-2': 75.0,
+                'SCHWP-1': 70.0, 'SCHWP-2': 70.0, 'SCHWP-3': 70.0
+            }
+
+        # Calculate current power from live speeds
         current_power = 0
         for pump_id, speed in current_speeds.items():
             pump_type = pump_id.split('-')[0]
-            rated_power = self.pump_specs[pump_type]['rated_power_kw']
-            # Power ∝ Speed³
-            power = rated_power * (speed / 100) ** 3
-            current_power += power
+            rated_power = self.pump_specs.get(pump_type, {}).get('rated_power_kw', 45)
+            current_power += rated_power * (speed / 100) ** 3
         
         # Optimize speeds based on required flow
         # Primary pumps: 2 running
@@ -253,20 +259,34 @@ Provide proposals in JSON with:
         }
     
     def _analyze_towers(self, cooling_load_kw: float, wet_bulb_temp: float, metrics: Dict) -> Dict:
-        """Analyze cooling tower performance"""
-        
+        """Analyze cooling tower performance using live DB data"""
+
         # Calculate heat rejection
         heat_rejection_kw = cooling_load_kw * 1.3  # Includes compressor heat
-        
-        # Current tower approach (simulated)
-        current_approach = 3.8  # °C
+
+        # Fetch live tower data from DB
+        tower_rows = self.live_data.get_tower_telemetry()
+        if tower_rows:
+            # Average across all active towers
+            approaches = [r.get('ApproachTempCelsius') for r in tower_rows if r.get('ApproachTempCelsius') is not None]
+            fan_speeds = []
+            for r in tower_rows:
+                if r.get('Fan1VFDSpeedPercent') is not None:
+                    fan_speeds.append(float(r['Fan1VFDSpeedPercent']))
+                if r.get('Fan2VFDSpeedPercent') is not None:
+                    fan_speeds.append(float(r['Fan2VFDSpeedPercent']))
+            current_approach = float(np.mean(approaches)) if approaches else 3.8
+            current_fan_speed = float(np.mean(fan_speeds)) if fan_speeds else 75.0
+        else:
+            # Fall back only when DB is unavailable
+            current_approach = 3.8
+            current_fan_speed = 75.0
+
         target_approach = self.targets['tower_approach']
-        
-        # Current fan speeds (simulated)
-        current_fan_speed = 75.0  # %
-        
+
         # Current fan power
-        current_fan_power = 2 * 2 * 15 * (current_fan_speed / 100) ** 3  # 2 towers, 2 fans each
+        num_fans = len(tower_rows) * 2 if tower_rows else 4  # 2 fans per tower
+        current_fan_power = num_fans * self.tower_specs['fan_power_kw_each'] * (current_fan_speed / 100) ** 3
         
         # Optimize fan speed
         # If approach is good, can reduce fan speed
@@ -280,7 +300,7 @@ Provide proposals in JSON with:
             optimal_fan_speed = min(100, optimal_fan_speed)
         
         # Optimized fan power
-        optimized_fan_power = 2 * 2 * 15 * (optimal_fan_speed / 100) ** 3
+        optimized_fan_power = num_fans * self.tower_specs['fan_power_kw_each'] * (optimal_fan_speed / 100) ** 3
         
         savings_kw = current_fan_power - optimized_fan_power
         

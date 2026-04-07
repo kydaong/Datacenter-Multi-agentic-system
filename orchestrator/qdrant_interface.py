@@ -20,7 +20,9 @@ class QdrantInterface:
     def __init__(self):
         self.client = QdrantClient(
             host=os.getenv('QDRANT_HOST', 'localhost'),  #set fallback value in case env key not retrieved
-            port=int(os.getenv('QDRANT_PORT', 6333))
+            port=int(os.getenv('QDRANT_PORT', 6333)),
+            api_key=os.getenv('QDRANT_API_KEY'),
+            https=False
         )
 
         # Load embedding model
@@ -62,10 +64,10 @@ class QdrantInterface:
                 ]
             )
         
-        # Search (qdrant-client 1.7+ uses query_points instead of search)
-        response = self.client.query_points(
+        # Search
+        response = self.client.search(
             collection_name="sops",
-            query=query_vector,
+            query_vector=query_vector,
             query_filter=search_filter,
             limit=top_k,
             with_payload=True
@@ -73,7 +75,7 @@ class QdrantInterface:
 
         # Format results
         formatted_results = []
-        for hit in response.points:
+        for hit in response:
             formatted_results.append({
                 'text': hit.payload.get('text'),
                 'source': hit.payload.get('source'),
@@ -116,16 +118,16 @@ class QdrantInterface:
                 ]
             )
         
-        response = self.client.query_points(
+        response = self.client.search(
             collection_name="equipment_manuals",
-            query=query_vector,
+            query_vector=query_vector,
             query_filter=search_filter,
             limit=top_k,
             with_payload=True
         )
 
         formatted_results = []
-        for hit in response.points:
+        for hit in response:
             formatted_results.append({
                 'text': hit.payload.get('text'),
                 'source': hit.payload.get('source'),
@@ -154,15 +156,15 @@ class QdrantInterface:
         
         query_vector = self.encoder.encode(query).tolist()
         
-        response = self.client.query_points(
+        response = self.client.search(
             collection_name="regulations",
-            query=query_vector,
+            query_vector=query_vector,
             limit=top_k,
             with_payload=True
         )
 
         formatted_results = []
-        for hit in response.points:
+        for hit in response:
             formatted_results.append({
                 'text': hit.payload.get('text'),
                 'source': hit.payload.get('source'),
@@ -190,15 +192,15 @@ class QdrantInterface:
         
         query_vector = self.encoder.encode(query).tolist()
         
-        response = self.client.query_points(
+        response = self.client.search(
             collection_name="kpi_definitions",
-            query=query_vector,
+            query_vector=query_vector,
             limit=top_k,
             with_payload=True
         )
 
         formatted_results = []
-        for hit in response.points:
+        for hit in response:
             formatted_results.append({
                 'text': hit.payload.get('text'),
                 'kpi_name': hit.payload.get('kpi_name'),

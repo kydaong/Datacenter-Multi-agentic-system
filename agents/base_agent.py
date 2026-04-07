@@ -64,6 +64,7 @@ class BaseAgent(ABC):
         self.medium_term_memory = medium_term_memory
         self.short_term_memory = short_term_memory
         self.long_term_memory = long_term_memory
+        self.live_data = live_data
         
         # Agent state
         self.confidence_level = 0.0

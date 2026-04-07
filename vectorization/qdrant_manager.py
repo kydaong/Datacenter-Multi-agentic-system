@@ -37,9 +37,10 @@ class QdrantManager:
         
         self.host = host or config.QDRANT_HOST
         self.port = port or config.QDRANT_PORT
+        self.api_key = config.api_key
         
         print(f"Connecting to Qdrant at {self.host}:{self.port}...")
-        self.client = QdrantClient(host=self.host, port=self.port)
+        self.client = QdrantClient(host=self.host, port=self.port, api_key= self.api_key, https=False)
         
         print(f"✅ Connected to Qdrant")
     

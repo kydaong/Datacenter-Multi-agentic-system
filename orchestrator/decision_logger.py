@@ -4,9 +4,13 @@ Logs complete debate sessions, decisions, and execution results to SQL Server
 """
 
 import pyodbc
+import os
 from typing import Dict, List, Optional
 from datetime import datetime
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def _parse_dt(value) -> Optional[datetime]:
@@ -41,16 +45,32 @@ class DecisionLogger:
         """
         
         if connection_string is None:
-            # Default connection string (update with your credentials)
-            connection_string = (
-                "DRIVER={ODBC Driver 17 for SQL Server};"
-                "SERVER=localhost\\SQLEXPRESS;"
-                "DATABASE=AOM-Dev;"
-                "Trusted_Connection=yes;"
-            )
-        
+            driver   = os.getenv('AZURE_DRIVER', os.getenv('DB_DRIVER', 'ODBC Driver 17 for SQL Server'))
+            server   = os.getenv('AZURE_SQL_SERVER', os.getenv('DB_SERVER', r'localhost\SQLEXPRESS'))
+            database = os.getenv('AZURE_SQL_DATABASE', os.getenv('DB_NAME', 'AOM-Dev'))
+            user     = os.getenv('AZURE_SQL_USER', os.getenv('DB_USER'))
+            password = os.getenv('AZURE_SQL_PWD', os.getenv('DB_PASSWORD'))
+            if user and password:
+                if ';' in password or '{' in password or '}' in password:
+                    password = '{' + password + '}'
+                connection_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={server};"
+                    f"DATABASE={database};"
+                    f"UID={user};"
+                    f"PWD={password};"
+                    f"TrustServerCertificate=yes;"
+                )
+            else:
+                connection_string = (
+                    f"DRIVER={{{driver}}};"
+                    f"SERVER={server};"
+                    f"DATABASE={database};"
+                    f"Trusted_Connection=yes;"
+                )
+
         self.connection_string = connection_string
-        
+
         print("  Initializing Decision Logger...")
         self._create_tables_if_not_exist()
     
