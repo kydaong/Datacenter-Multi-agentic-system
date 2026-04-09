@@ -31,7 +31,7 @@ app = FastAPI(title="MAGS API")
 # CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5174", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,6 +48,10 @@ class AnalyzeRequest(BaseModel):
     context: Dict
     human_input: Optional[str] = None
     prior_summary: Optional[str] = None  # previous debate summary for follow-up questions
+
+
+class FetchDocsRequest(BaseModel):
+    query: str
 
 
 class NudgeRequest(BaseModel):
@@ -192,36 +196,64 @@ async def broadcast_agent_activity(agent_name: str, message: str):
             active_connections.remove(connection)
 
 
+@app.post("/fetch-docs")
+async def fetch_docs(request: FetchDocsRequest):
+    """
+    Direct knowledge-base lookup — bypasses the agent debate entirely.
+    Queries all Qdrant collections and returns cited document excerpts.
+    """
+    try:
+        result = orchestrator.fetch_documents(request.query)
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/analyze/stream")
 async def analyze_stream(request: AnalyzeRequest):
     """
     Streaming SSE endpoint: streams debate messages as they are generated.
-    Uses asyncio.Queue + call_soon_threadsafe so the thread can push events
-    without blocking the event loop.
+    If the orchestrator classifies the query as a document lookup it emits a
+    single __docs__ event instead of starting the 4-round debate.
     """
     loop = asyncio.get_event_loop()
     async_queue: asyncio.Queue = asyncio.Queue()
 
-    def stream_callback(event):
-        # Called from the background thread — bridge to async queue
-        loop.call_soon_threadsafe(async_queue.put_nowait, event)
+    # ── Intent classification: doc fetch or debate? ──────────────────────
+    intent = orchestrator.classify_query_intent(request.human_input)
 
-    orchestrator.debate_manager.stream_callback = stream_callback
+    if intent == 'FETCH_DOCS':
+        def run_fetch():
+            try:
+                docs = orchestrator.fetch_documents(request.human_input)
+                loop.call_soon_threadsafe(
+                    async_queue.put_nowait,
+                    {'__docs__': True, 'data': docs}
+                )
+            except Exception as e:
+                loop.call_soon_threadsafe(async_queue.put_nowait, {'__error__': str(e)})
 
-    def run_debate():
-        try:
-            result = orchestrator.analyze_and_propose(
-                context=request.context,
-                human_input=request.human_input,
-                prior_summary=request.prior_summary
-            )
-            loop.call_soon_threadsafe(async_queue.put_nowait, {'__done__': True, 'decision': result})
-        except Exception as e:
-            loop.call_soon_threadsafe(async_queue.put_nowait, {'__error__': str(e)})
-        finally:
-            orchestrator.debate_manager.stream_callback = None
+        threading.Thread(target=run_fetch, daemon=True).start()
+    else:
+        def stream_callback(event):
+            loop.call_soon_threadsafe(async_queue.put_nowait, event)
 
-    threading.Thread(target=run_debate, daemon=True).start()
+        orchestrator.debate_manager.stream_callback = stream_callback
+
+        def run_debate():
+            try:
+                result = orchestrator.analyze_and_propose(
+                    context=request.context,
+                    human_input=request.human_input,
+                    prior_summary=request.prior_summary
+                )
+                loop.call_soon_threadsafe(async_queue.put_nowait, {'__done__': True, 'decision': result})
+            except Exception as e:
+                loop.call_soon_threadsafe(async_queue.put_nowait, {'__error__': str(e)})
+            finally:
+                orchestrator.debate_manager.stream_callback = None
+
+        threading.Thread(target=run_debate, daemon=True).start()
 
     def _serialise(obj):
         if isinstance(obj, (datetime, date)):
@@ -234,7 +266,7 @@ async def analyze_stream(request: AnalyzeRequest):
         while True:
             event = await async_queue.get()
             yield f"data: {json.dumps(event, default=_serialise)}\n\n"
-            if '__done__' in event or '__error__' in event:
+            if '__done__' in event or '__error__' in event or '__docs__' in event:
                 break
 
     return StreamingResponse(

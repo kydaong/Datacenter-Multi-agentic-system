@@ -14,7 +14,7 @@ load_dotenv()
 
 class QdrantInterface:
     """
-    Interface to Qdrant vector database for knowledge retriZZeval
+    Interface to Qdrant vector database for knowledge retrieval
     """
     
     def __init__(self):

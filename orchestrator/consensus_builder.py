@@ -59,10 +59,10 @@ class ConsensusBuilder:
         
         print("\n  Analyzing votes...")
         
-        # Get final vote (Round 4)
-        round_4 = debate_result['rounds'][3]
-        votes = round_4['votes']
-        primary_proposal = round_4['primary_proposal']
+        # Get final vote (Round 2 — debate + vote combined)
+        round_2 = debate_result['rounds'][1]
+        votes = round_2['votes']
+        primary_proposal = round_2['primary_proposal']
         
         # Check for vetoes
         vetoes = self._check_vetoes(votes)

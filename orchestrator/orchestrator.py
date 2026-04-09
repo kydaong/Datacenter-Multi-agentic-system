@@ -7,12 +7,15 @@ Provides complete debate visibility
 """
 
 import sys
+import re
+import os
 import time
 sys.path.append('..')
 
 from typing import Dict, List, Optional
 from datetime import datetime
 import json
+import anthropic
 
 from agents.demand_conditions_agent import DemandConditionsAgent
 from agents.chiller_optimization import ChillerOptimizationAgent
@@ -29,6 +32,41 @@ from .medium_term_memory import MediumTermMemory
 from .long_term_memory import LongTermMemory
 from .learning_tracker import LearningTracker
 from .live_data import live_data
+from .qdrant_interface import qdrant
+
+# Document-type keywords -- trigger knowledge retrieval ONLY when paired with an info verb
+_DOC_KEYWORDS = [
+    r'\bsop\b', r'\bstandard\s+operating', r'\bmanual\b', r'\bregulation',
+    r'\bcompliance\s+doc', r'\bkpi\s+def', r'\breference\s+doc', r'\bdocument',
+    r'\bprocedure\b', r'\bchecklist\b', r'\bguideline\b', r'\bspecification\b',
+    r'\bspec\s+sheet\b', r'\bdata\s+sheet\b', r'\bstandard\b',
+]
+
+# Info-seeking verbs -- must pair with a doc keyword to trigger knowledge retrieval
+_INFO_VERBS = [
+    r'\btell\s+me\s+about\b', r'\bexplain\b', r'\bdescribe\b',
+    r'\bwhat\s+is\b', r'\bwhat\s+are\b', r'\bwhat\s+does\b', r'\bwhat\s+do\b',
+    r'\bhow\s+do\s+i\b', r'\bshow\s+me\b', r'\bgive\s+me\b',
+    r'\baccording\s+to\b', r'\bbased\s+on\s+the\b', r'\bsummarise\b', r'\bsummarize\b',
+]
+
+# Patterns that unconditionally indicate a knowledge-base lookup -- bypass debate
+_DOC_FETCH_UNCONDITIONAL = [
+    r'\bfetch\b', r'\bget\s+me\b', r'\blook\s*up\b', r'\bpull\s+up\b',
+    r'\bsop\s*detail', r'\bwhat\s+does\s+the\s+sop',
+    r'\blist\s+(the\s+)?(sop|manual|regulation|procedure|document)',
+    r'\bwhat\s+does\s+the\s+regulation\b', r'\bwhat\s+does\s+the\s+manual\b',
+    r'\bwhat\s+does\s+the\s+standard\b', r'\bwhat\s+does\s+the\s+procedure\b',
+]
+
+# Operational / decision intent -- force DEBATE even if doc keywords are present
+_DEBATE_OVERRIDE = [
+    r'\bshould\s+we\b', r'\bshould\s+i\b', r'\bwhat\s+should\b',
+    r'\brecommend\b', r'\badvise\b', r'\badvise\b',
+    r'\boptimis', r'\boptimiz', r'\bdecide\b', r'\bwhat\s+action\b',
+    r'\bwhat\s+do\s+you\s+think\b', r'\bwhat\s+would\s+you\b',
+    r'\bcan\s+we\b', r'\bshall\s+we\b',
+]
 
 
 class Orchestrator:
@@ -49,11 +87,11 @@ class Orchestrator:
     - Track learning and improvement
     
     Human interactions:
-    1. Human → Orchestrator: Query or context
-    2. Orchestrator → Agents: Run debate
-    3. Orchestrator → Human: Present decision for approval
-    4. Human → Orchestrator: Approve/Reject/Nudge/View Debate
-    5. Orchestrator → Systems: Execute if approved
+    1. Human -> Orchestrator: Query or context
+    2. Orchestrator -> Agents: Run debate
+    3. Orchestrator -> Human: Present decision for approval
+    4. Human -> Orchestrator: Approve/Reject/Nudge/View Debate
+    5. Orchestrator -> Systems: Execute if approved
     """
     
     def __init__(self, connection_string: Optional[str] = None):
@@ -159,18 +197,18 @@ class Orchestrator:
                 # Live DB values win; keep any frontend keys not in DB (e.g. human_question)
                 merged = {**context, **{k: v for k, v in live_context.items() if v is not None}}
                 context = merged
-                print(f"  ✅ Live context loaded — {len(live_context)} fields from DB")
+                print(f"  ✅ Live context loaded -- {len(live_context)} fields from DB")
             else:
                 print("  ⚠️  Live context empty, using frontend context as-is")
         except Exception as e:
             print(f"  ⚠️  Live data fetch failed ({e}), using frontend context as-is")
 
         print(f"\n📊 System Context (live):")
-        print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
-        print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
-        print(f"  • PUE: {context.get('current_pue', 'N/A')}")
-        print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
-        print(f"  • Chillers online: {context.get('chillers_online', 'N/A')}")
+        print(f"  * Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
+        print(f"  * IT Load: {context.get('it_load_kw', 'N/A')} kW")
+        print(f"  * PUE: {context.get('current_pue', 'N/A')}")
+        print(f"  * Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
+        print(f"  * Chillers online: {context.get('chillers_online', 'N/A')}")
 
         # Store system state
         self.short_term_memory.store_system_state(context)
@@ -447,10 +485,10 @@ class Orchestrator:
         
         print(f"\n📊 Context:")
         context = debate['context']
-        print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
-        print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
-        print(f"  • PUE: {context.get('current_pue', 'N/A')}")
-        print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
+        print(f"  * Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
+        print(f"  * IT Load: {context.get('it_load_kw', 'N/A')} kW")
+        print(f"  * PUE: {context.get('current_pue', 'N/A')}")
+        print(f"  * Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
         
         # Display each round
         for round_detail in debate['rounds']:
@@ -470,7 +508,7 @@ class Orchestrator:
         if summary.get('vetoes'):
             print(f"\n⛔ Vetoes:")
             for veto in summary['vetoes']:
-                print(f"  • {veto['agent']}: {veto['reasoning']}")
+                print(f"  * {veto['agent']}: {veto['reasoning']}")
         
         if summary.get('key_arguments'):
             print(f"\n💡 Key Arguments:")
@@ -519,59 +557,36 @@ class Orchestrator:
             
             formatted['summary'] = f"{len(proposals)} proposals submitted"
         
-        # Round 2: Responses
+        # Round 2: Debate + Vote (combined)
         elif round_num == 2:
             responses = round_data.get('responses', [])
-            for resp in responses:
-                agent = resp.get('agent', 'Unknown')
-                formatted['agents_participated'].append(agent)
-                
-                for response in resp.get('responses_to_proposals', []):
-                    formatted['responses'].append({
-                        'responding_agent': agent,
-                        'responding_to': response.get('proposal_by', 'Unknown'),
-                        'stance': response.get('stance', 'NEUTRAL'),
-                        'comment': response.get('comment', '')
-                    })
-            
-            formatted['summary'] = f"{len(formatted['responses'])} responses exchanged"
-        
-        # Round 3: Refinements
-        elif round_num == 3:
-            refined = round_data.get('refined_positions', [])
-            for ref in refined:
-                agent = ref.get('agent', 'Unknown')
-                formatted['agents_participated'].append(agent)
-                
-                formatted['proposals'].append({
-                    'agent': agent,
-                    'position_changed': ref.get('position_changed', False),
-                    'updated_position': ref.get('updated_position', ''),
-                    'support_received': ref.get('support_percentage', 0)
-                })
-            
-            changed_count = sum(1 for r in refined if r.get('position_changed'))
-            formatted['summary'] = f"{changed_count} agents refined positions"
-        
-        # Round 4: Final Vote
-        elif round_num == 4:
             votes = round_data.get('votes', [])
             primary_proposal = round_data.get('primary_proposal', {})
-            
+
             formatted['primary_proposal'] = {
                 'action_type': primary_proposal.get('action_type', 'UNKNOWN'),
                 'proposed_by': primary_proposal.get('agent', 'Unknown'),
                 'description': primary_proposal.get('description', '')
             }
-            
+
+            for resp in responses:
+                agent = resp.get('agent', 'Unknown')
+                formatted['agents_participated'].append(agent)
+                formatted['responses'].append({
+                    'responding_agent': agent,
+                    'comment': resp.get('response_text', '')
+                })
+
             for vote in votes:
                 formatted['votes'].append({
                     'agent': vote.get('agent', 'Unknown'),
                     'vote': vote.get('vote', 'UNKNOWN'),
-                    'reasoning': vote.get('reasoning', ''),
+                    'reasoning': vote.get('reasoning_text', vote.get('reasoning', '')),
                     'confidence': vote.get('confidence', 0)
                 })
-                formatted['agents_participated'].append(vote.get('agent'))
+
+            approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
+            formatted['summary'] = f"{len(responses)} agents debated -- {approve_count}/{len(votes)} approved"
             
             approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
             formatted['summary'] = f"{approve_count}/{len(votes)} agents approved"
@@ -603,36 +618,23 @@ class Orchestrator:
                     print(f"   Predicted Savings: {prop['predicted_savings']}")
                 print(f"   Confidence: {prop.get('confidence', 0):.2f}")
         
-        # Round 2: Responses
+        # Round 2: Debate + Vote
         elif round_detail['round_number'] == 2:
-            for resp in round_detail['responses']:
-                print(f"\n💬 {resp['responding_agent']} → {resp['responding_to']}:")
-                print(f"   Stance: {resp['stance']}")
-                print(f"   Comment: {resp['comment']}")
-        
-        # Round 3: Refinements
-        elif round_detail['round_number'] == 3:
-            for prop in round_detail['proposals']:
-                print(f"\n🔄 {prop['agent']}:")
-                if prop['position_changed']:
-                    print(f"   ✓ Position refined")
-                    print(f"   Updated: {prop['updated_position']}")
-                else:
-                    print(f"   ○ Position unchanged")
-                print(f"   Support: {prop['support_received']:.0f}%")
-        
-        # Round 4: Votes
-        elif round_detail['round_number'] == 4:
-            print(f"\n📋 Primary Proposal:")
             pp = round_detail.get('primary_proposal', {})
-            print(f"   {pp.get('action_type', 'UNKNOWN')} by {pp.get('proposed_by', 'Unknown')}")
-            print(f"   {pp.get('description', '')}")
-            
+            if pp:
+                print(f"\n📋 Primary Proposal: {pp.get('action_type', 'UNKNOWN')} by {pp.get('proposed_by', 'Unknown')}")
+                print(f"   {pp.get('description', '')}")
+
+            print(f"\n💬 Debate:")
+            for resp in round_detail.get('responses', []):
+                print(f"\n  {resp['responding_agent']}:")
+                print(f"   {resp['comment'][:200]}...")
+
             print(f"\n🗳️  Votes:")
-            for vote in round_detail['votes']:
+            for vote in round_detail.get('votes', []):
                 vote_symbol = "✓" if vote['vote'] in ['APPROVE', 'APPROVE_WITH_CONDITIONS'] else "✗"
                 print(f"   {vote_symbol} {vote['agent']}: {vote['vote']}")
-                print(f"      {vote['reasoning']}")
+                print(f"      {str(vote['reasoning'])[:150]}")
     
     def _create_debate_summary(self, rounds: List[Dict], consensus_result: Dict) -> Dict:
         """
@@ -802,14 +804,13 @@ class Orchestrator:
             'is_nudge_response': is_nudge,
             'original_session_id': original_session_id if is_nudge else None,
             
-            # Executive Summary
-            'executive_summary': {
-                'recommendation': decision.get('action_type', 'MONITORING_UPDATE'),
-                'description': decision.get('description', 'No action required'),
-                'confidence': round(consensus_result['confidence'], 2),
-                'consensus_strength': consensus_result['consensus_type'],
-                'requires_human_approval': self._requires_human_approval(consensus_result)
-            },
+            # Executive Summary -- LLM-synthesised answer to the human question
+            'executive_summary': self._synthesize_executive_summary(
+                human_input=context.get('human_question') or debate_result.get('human_input'),
+                decision=decision,
+                consensus_result=consensus_result,
+                debate_result=debate_result
+            ),
             
             # Predicted Impact
             'predicted_impact': decision.get('predicted_savings', {}),
@@ -874,7 +875,92 @@ class Orchestrator:
             return True
         
         return False
-    
+
+    def _synthesize_executive_summary(
+        self,
+        human_input: Optional[str],
+        decision: Dict,
+        consensus_result: Dict,
+        debate_result: Dict
+    ) -> Dict:
+        """
+        Use Claude Haiku to generate a natural-language executive summary that
+        directly answers the human's question, states the recommendation clearly,
+        and surfaces secondary alternatives from the debate.
+        """
+        base = {
+            'recommendation': decision.get('action_type', 'MONITORING_UPDATE'),
+            'description': decision.get('description', 'No action required'),
+            'confidence': round(consensus_result['confidence'], 2),
+            'consensus_strength': consensus_result['consensus_type'],
+            'requires_human_approval': self._requires_human_approval(consensus_result),
+            'answer': None,
+            'secondary_options': []
+        }
+
+        # Collect alternatives from Round 1 proposals (excluding the primary)
+        primary_action = decision.get('action_type', '')
+        alternatives = []
+        if debate_result.get('rounds'):
+            for prop in debate_result['rounds'][0].get('proposals', []):
+                if (prop.get('action_type') not in ['MONITORING_UPDATE', 'ERROR', primary_action]
+                        and prop.get('description')):
+                    alternatives.append(
+                        f"- {prop.get('agent')}: {prop.get('action_type')} -- {prop.get('description', '')[:120]}"
+                    )
+
+        base['secondary_options'] = alternatives
+
+        if not human_input:
+            return base
+
+        # Build a compact vote summary for context
+        votes_text = "\n".join([
+            f"  {v.get('agent')}: {v.get('vote')} -- {str(v.get('reasoning_text', v.get('reasoning', '')))[:100]}"
+            for v in consensus_result.get('votes', [])
+        ])
+
+        alt_text = "\n".join(alternatives) if alternatives else "None"
+
+        prompt = f"""You are summarising an expert debate for a datacenter operator.
+
+HUMAN QUESTION: {human_input}
+
+TEAM RECOMMENDATION: {decision.get('action_type')} -- {decision.get('description', '')}
+CONFIDENCE: {round(consensus_result['confidence'] * 100)}%
+CONSENSUS: {consensus_result['consensus_type']}
+
+AGENT VOTES:
+{votes_text}
+
+ALTERNATIVE OPTIONS RAISED:
+{alt_text}
+
+Respond in this exact format -- no extra text:
+
+**[One-line direct answer to the human question]**
+
+**Recommendation:** [action] -- [single most important reason]
+**Confidence:** {round(consensus_result['confidence'] * 100)}% ({consensus_result['consensus_type']})
+
+**Alternatives considered:**
+[bullet each alternative as: * [agent]: [action] -- [one-line reason]; skip if none]
+
+Keep every line brief. Plain English. No filler."""
+
+        try:
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=250,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            base['answer'] = response.content[0].text.strip()
+        except Exception as e:
+            print(f"  [SUMMARY] LLM synthesis failed ({e}), using raw description")
+
+        return base
+
     def _extract_key_arguments(self, debate_result: Dict) -> List[Dict]:
         """Extract key arguments from debate"""
         
@@ -937,12 +1023,12 @@ class Orchestrator:
                 for p in proposals:
                     action = p.get('action_type', 'UNKNOWN')
                     agent = p.get('agent', 'Unknown')
-                    summary_lines.append(f"  • {agent}: {action}")
+                    summary_lines.append(f"  * {agent}: {action}")
             
-            elif round_num == 4:
+            elif round_num == 2:
                 votes = round_data.get('votes', [])
                 approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
-                summary_lines.append(f"  • Votes: {approve_count}/{len(votes)} approved")
+                summary_lines.append(f"  * Debate + Votes: {approve_count}/{len(votes)} approved")
         
         return "\n".join(summary_lines)
     
@@ -998,7 +1084,7 @@ class Orchestrator:
         ]
 
         for step in execution_steps:
-            print(f"  • {step}")
+            print(f"  * {step}")
             time.sleep(0.3)
 
         execution_result = {
@@ -1039,6 +1125,213 @@ class Orchestrator:
             'status': 'OPERATIONAL'
         }
 
+    # ── Document / Knowledge-base retrieval ─────────────────────────────
+
+    def classify_query_intent(self, human_input: str) -> str:
+        """
+        Hybrid classifier: high-confidence keyword rules first, LLM fallback for
+        ambiguous queries.
+
+        Stages:
+          1. Debate override keywords (should we, recommend, optimize...) -> DEBATE  [fast]
+          2. Unconditional fetch keywords (fetch, look up, what does the SOP say...) -> FETCH_DOCS  [fast]
+          3. Info verb + doc keyword combination -> FETCH_DOCS  [fast]
+          4. Ambiguous -- ask Haiku to classify by meaning  [LLM fallback]
+
+        Returns:
+            'FETCH_DOCS'   - bypass debate, query Qdrant directly
+            'DEBATE'       - run normal 2-round agent debate
+        """
+        if not human_input:
+            return 'DEBATE'
+        text = human_input.lower()
+
+        # Stage 1 -- operational/decision intent overrides everything -> DEBATE
+        if any(re.search(p, text) for p in _DEBATE_OVERRIDE):
+            print(f"  [INTENT] DEBATE (keyword override)")
+            return 'DEBATE'
+
+        # Stage 2 -- explicit knowledge-retrieval patterns -> FETCH_DOCS
+        if any(re.search(p, text) for p in _DOC_FETCH_UNCONDITIONAL):
+            print(f"  [INTENT] FETCH_DOCS (unconditional keyword)")
+            return 'FETCH_DOCS'
+
+        # Stage 3 -- info-seeking verb + doc keyword together -> FETCH_DOCS
+        has_doc_keyword = any(re.search(p, text) for p in _DOC_KEYWORDS)
+        has_info_verb = any(re.search(p, text) for p in _INFO_VERBS)
+        if has_info_verb and has_doc_keyword:
+            print(f"  [INTENT] FETCH_DOCS (verb + doc keyword)")
+            return 'FETCH_DOCS'
+
+        # Stage 4 -- ambiguous: use LLM to classify by meaning
+        return self._classify_intent_llm(human_input)
+
+    def _classify_intent_llm(self, human_input: str) -> str:
+        """
+        LLM fallback for queries that keyword rules couldn't confidently classify.
+        Uses Haiku for speed and low cost.
+        """
+        print(f"  [INTENT] Ambiguous -- calling LLM classifier...")
+        try:
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=5,
+                system=(
+                    "You are a query router for a datacenter management system. "
+                    "Classify the user query as exactly one of:\n"
+                    "  FETCH_DOCS -- the user wants to know what a document, regulation, SOP, "
+                    "manual, standard, guideline, or procedure says (information retrieval).\n"
+                    "  DEBATE -- the user wants an operational recommendation, decision, "
+                    "optimization, diagnosis, or action plan.\n"
+                    "Reply with only FETCH_DOCS or DEBATE."
+                ),
+                messages=[{"role": "user", "content": human_input}]
+            )
+            intent = response.content[0].text.strip().upper()
+            if intent not in ('FETCH_DOCS', 'DEBATE'):
+                intent = 'DEBATE'
+            print(f"  [INTENT] LLM -> {intent}")
+            return intent
+        except Exception as e:
+            print(f"  [INTENT] LLM classifier failed ({e}), defaulting to DEBATE")
+            return 'DEBATE'
+
+    def fetch_documents(self, query: str) -> Dict:
+        """
+        Directly query all Qdrant collections and return cited results.
+        No agent debate is triggered.
+
+        Args:
+            query: Natural-language knowledge request
+
+        Returns:
+            {
+              'query': str,
+              'results': [
+                {
+                  'collection': str,       # 'SOPs' | 'Equipment Manuals' | 'Regulations' | 'KPI Definitions'
+                  'title': str,
+                  'text': str,
+                  'source': str,
+                  'page': int | None,
+                  'section': str | None,
+                  'score': float,
+                  'metadata': dict
+                }, ...
+              ],
+              'total_found': int,
+              'timestamp': str
+            }
+        """
+        print(f"\n[FETCH_DOCS] Knowledge-base lookup: '{query}'")
+        results = []
+
+        collection_searches = [
+            ('SOPs',               lambda: qdrant.search_sops(query, top_k=5)),
+            ('Equipment Manuals',  lambda: qdrant.search_equipment_manuals(query, top_k=3)),
+            ('Regulations',        lambda: qdrant.search_regulations(query, top_k=3)),
+            ('KPI Definitions',    lambda: qdrant.search_kpi_definitions(query, top_k=2)),
+        ]
+
+        for collection_label, search_fn in collection_searches:
+            try:
+                hits = search_fn()
+                for hit in hits:
+                    # Only include results with a meaningful relevance score
+                    if hit.get('score', 0) < 0.25:
+                        continue
+                    entry = {
+                        'collection': collection_label,
+                        'text': hit.get('text', ''),
+                        'source': hit.get('source', 'Unknown Source'),
+                        'page': hit.get('page'),
+                        'section': hit.get('section'),
+                        'score': round(hit.get('score', 0), 3),
+                        'metadata': {
+                            k: v for k, v in hit.items()
+                            if k not in ('text', 'source', 'page', 'section', 'score')
+                        }
+                    }
+                    # Build a readable title
+                    if entry['section']:
+                        entry['title'] = entry['section']
+                    elif collection_label == 'KPI Definitions':
+                        entry['title'] = hit.get('kpi_name', collection_label)
+                    elif collection_label == 'Regulations':
+                        entry['title'] = hit.get('regulation_type', collection_label)
+                    else:
+                        entry['title'] = entry['source']
+                    results.append(entry)
+            except Exception as exc:
+                print(f"  ⚠️  {collection_label} search failed: {exc}")
+
+        # Sort by relevance score descending
+        results.sort(key=lambda r: r['score'], reverse=True)
+
+        print(f"  ✅ {len(results)} document(s) retrieved across all collections")
+
+        # ── Grounded LLM summarisation ───────────────────────────────────────
+        # Claude only sees the retrieved chunks -- no external knowledge allowed.
+        # Its sole job is to rewrite the content in natural language and cite sources.
+        summary = None
+        if results:
+            try:
+                # Build a numbered reference block from the raw retrieved text only
+                def _ref_line(i, r):
+                    page_part    = f", Page {r['page']}"    if r.get('page')    else ''
+                    section_part = f", Section: {r['section']}" if r.get('section') else ''
+                    return (
+                        f"[{i+1}] Collection: {r['collection']}\n"
+                        f"    Source: {r['source']}{page_part}{section_part}\n"
+                        f"    Text: {r['text']}"
+                    )
+                ref_block = "\n\n".join(_ref_line(i, r) for i, r in enumerate(results))
+
+                system_prompt = (
+                    "You are a document summariser for a datacenter management system. "
+                    "Your ONLY job is to present the retrieved document content in clear, "
+                    "natural language. You must follow these rules without exception:\n"
+                    "1. Use ONLY the text provided in the numbered references below -- "
+                    "do not add, infer, or invent any information not explicitly stated.\n"
+                    "2. After every factual statement cite the reference number in square "
+                    "brackets, e.g. [1] or [2][3].\n"
+                    "3. If the references do not contain enough information to answer the "
+                    "query, say so explicitly -- never guess.\n"
+                    "4. Do not paraphrase in a way that changes the meaning.\n"
+                    "5. Keep the response concise and structured."
+                )
+
+                user_message = (
+                    f"User query: \"{query}\"\n\n"
+                    f"Retrieved references:\n{ref_block}\n\n"
+                    "Summarise the above references in natural language, citing each "
+                    "reference number inline. Do not add any information beyond what is "
+                    "written in the references."
+                )
+
+                client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+                response = client.messages.create(
+                    model="claude-haiku-4-5-20251001",   # fast, low-cost for summarisation
+                    max_tokens=800,
+                    temperature=0.0,                      # deterministic -- no creative additions
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}]
+                )
+                summary = response.content[0].text
+                print(f"  ✅ Grounded summary generated ({len(summary)} chars)")
+            except Exception as exc:
+                print(f"  ⚠️  Summary generation failed: {exc}")
+                summary = None
+
+        return {
+            'query': query,
+            'summary': summary,          # natural-language rewrite, always cited
+            'results': results,          # raw Qdrant chunks for source verification
+            'total_found': len(results),
+            'timestamp': datetime.now().isoformat()
+        }
+
 
 # Example usage and testing
 if __name__ == "__main__":
@@ -1053,11 +1346,11 @@ if __name__ == "__main__":
     # Fetch live context from AOM-Dev
     print("\n[CONTEXT] Fetching live system context from AOM-Dev...")
     context = live_data.get_current_context()
-    print(f"  • Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
-    print(f"  • IT Load: {context.get('it_load_kw', 'N/A')} kW")
-    print(f"  • PUE: {context.get('current_pue', 'N/A')}")
-    print(f"  • Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
-    print(f"  • Chillers online: {context.get('chillers_online_count', 'N/A')}")
+    print(f"  * Cooling Load: {context.get('cooling_load_kw', 'N/A')} kW")
+    print(f"  * IT Load: {context.get('it_load_kw', 'N/A')} kW")
+    print(f"  * PUE: {context.get('current_pue', 'N/A')}")
+    print(f"  * Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C")
+    print(f"  * Chillers online: {context.get('chillers_online_count', 'N/A')}")
 
     human_input = "System seems to be running well. Any optimization opportunities?"
     

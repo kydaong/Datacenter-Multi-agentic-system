@@ -1,6 +1,6 @@
 """
 Debate Manager
-Manages 4-round debate protocol between agents
+Manages 2-round debate protocol between agents
 Facilitates natural, conversational agent-to-agent communication
 """
 
@@ -17,13 +17,11 @@ load_dotenv()
 
 class DebateManager:
     """
-    Manages structured 4-round debate protocol with natural conversations
-    
-    Round 1: Initial proposals (parallel)
-    Round 2: Agent responses and rebuttals (conversational)
-    Round 3: Consensus building and position refinement (dialogue)
-    Round 4: Final vote
-    
+    Manages structured 2-round debate protocol with natural conversations
+
+    Round 1: Initial proposals — each agent states their position and reasoning
+    Round 2: Debate + vote — agents critique/rebut peers, then cast their final vote
+
     Uses Claude API for natural language generation
     """
     
@@ -54,7 +52,7 @@ N+1 REDUNDANCY RULE (correct formula):
             stream_callback: Optional callable(event_dict) for real-time streaming
         """
         self.agents = agents
-        self.max_rounds = 4
+        self.max_rounds = 2
         self.stream_callback = stream_callback
 
         # Initialize Claude client for conversational responses
@@ -102,28 +100,16 @@ N+1 REDUNDANCY RULE (correct formula):
             )
         
         # Round 1: Initial proposals
-        print("\n[ROUND 1/4] Collecting initial proposals...")
+        print("\n[ROUND 1/2] Collecting initial proposals...")
         self._emit_round_marker(1, "Initial Proposals")
         round_1_result = self._run_round_1(context, debate_session)
         debate_session['rounds'].append(round_1_result)
 
-        # Round 2: Conversational responses and rebuttals
-        print("\n[ROUND 2/4] Agent conversations and rebuttals...")
-        self._emit_round_marker(2, "Agent Responses")
-        round_2_result = self._run_round_2_conversational(round_1_result, context, debate_session)
+        # Round 2: Debate, rebuttals, and final vote combined
+        print("\n[ROUND 2/2] Agent debate and final vote...")
+        self._emit_round_marker(2, "Debate & Vote")
+        round_2_result = self._run_round_2_debate_and_vote(round_1_result, context, debate_session)
         debate_session['rounds'].append(round_2_result)
-
-        # Round 3: Consensus building with dialogue
-        print("\n[ROUND 3/4] Building consensus through dialogue...")
-        self._emit_round_marker(3, "Consensus Building")
-        round_3_result = self._run_round_3_conversational(round_1_result, round_2_result, context, debate_session)
-        debate_session['rounds'].append(round_3_result)
-
-        # Round 4: Final vote
-        print("\n[ROUND 4/4] Final vote...")
-        self._emit_round_marker(4, "Final Vote")
-        round_4_result = self._run_round_4(debate_session)
-        debate_session['rounds'].append(round_4_result)
         
         debate_session['end_time'] = datetime.now().isoformat()
         
@@ -260,13 +246,14 @@ YOUR ANALYTICAL ASSESSMENT:
 {evidence_summary}
 
 YOUR TASK:
-Give your opening position as a domain expert directly responding to the human question above.
+Give your opening position as a domain expert DIRECTLY answering the human question above.
+- Your response MUST address what the human asked — do NOT pivot to unrelated optimizations
+- If no human question: comment on the most significant issue visible in the live data
 - Ground your answer in the live system numbers, memory context, and evidence — do NOT invent values
 - If recent decisions show a similar action was taken recently, factor in cooldown constraints
 - Be specific to YOUR domain expertise (not generic)
 - Reference actual values (kW, temps, COP, run hours, PUE, etc.) from the live state
-- If the question is about powering down: address feasibility and risk from your perspective
-- If the question is about staging up: address readiness, capacity margins, and risks
+- You may mention a relevant secondary observation from your domain, but keep the primary answer focused on the question
 - 2-4 sentences, conversational but authoritative
 
 Respond now as {agent.agent_name}:"""
@@ -283,86 +270,189 @@ Respond now as {agent.agent_name}:"""
             print(f"     Warning: LLM error in Round 1 message: {e}")
             return self._format_proposal_message(proposal)
     
-    def _run_round_2_conversational(
+    def _run_round_2_debate_and_vote(
         self,
         round_1: Dict,
         context: Dict,
         debate_session: Dict
     ) -> Dict:
         """
-        Round 2: Agents have natural conversations about each other's proposals
-        
-        Each agent reviews other proposals and generates conversational responses
-        using Claude API for natural language
+        Round 2: Combined debate + final vote.
+
+        Each agent:
+          1. Critiques/supports other proposals with reasoning
+          2. Casts their final APPROVE / APPROVE_WITH_CONDITIONS / REJECT / VETO vote
+
+        Single LLM call per agent — keeps the debate tight and fast.
         """
-        
-        responses = []
-        
-        # Get all proposals from Round 1
+
         round_1_proposals = round_1['proposals']
-        
-        # Filter out monitoring updates and errors for debate
         debate_proposals = [
-            p for p in round_1_proposals 
+            p for p in round_1_proposals
             if p.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']
         ]
-        
+
+        human_question = debate_session.get('human_input', '')
+        primary_proposal = self._identify_primary_proposal(round_1_proposals, human_question)
+        print(f"\n  Primary proposal: {primary_proposal.get('action_type')} by {primary_proposal.get('agent')}")
+
+        responses = []
+        votes = []
+
         if not debate_proposals:
-            # If no actionable proposals, have brief acknowledgments
             for agent in self.agents:
-                print(f"  → {agent.agent_name} acknowledging...")
-                
-                response_text = self._generate_acknowledgment(agent, round_1_proposals)
-                
+                print(f"  → {agent.agent_name} acknowledging + voting...")
+                ack_text = self._generate_acknowledgment(agent, round_1_proposals)
+                vote_entry = {
+                    'agent': agent.agent_name,
+                    'vote': 'APPROVE',
+                    'reasoning': ack_text,
+                    'reasoning_text': ack_text,
+                    'confidence': 0.80,
+                    'timestamp': datetime.now().isoformat()
+                }
+                responses.append({'agent': agent.agent_name, 'response_text': ack_text})
+                votes.append(vote_entry)
                 self._log_message(
                     debate_session,
                     speaker=agent.agent_name,
-                    message=response_text,
+                    message=f"[VOTE: APPROVE] {ack_text}",
                     timestamp=datetime.now()
                 )
-                
-                responses.append({
-                    'agent': agent.agent_name,
-                    'response_text': response_text
-                })
-            
-            return {
-                'round': 2,
-                'phase': 'ACKNOWLEDGMENTS',
-                'responses': responses,
-                'timestamp': datetime.now().isoformat()
-            }
-        
-        # Have real conversations about proposals
-        for agent in self.agents:
-            print(f"  → {agent.agent_name} responding...")
-            
-            # Generate conversational response
-            agent_response = self._generate_conversational_response(
-                agent,
-                debate_proposals,
-                round_1_proposals,
-                context,
-                debate_session
-            )
-            
-            responses.append(agent_response)
-            
-            # Log to conversation
-            self._log_message(
-                debate_session,
-                speaker=agent.agent_name,
-                message=agent_response['response_text'],
-                timestamp=datetime.now(),
-                metadata={'responding_to': agent_response.get('responding_to', [])}
-            )
-        
+        else:
+            for agent in self.agents:
+                print(f"  → {agent.agent_name} debating + voting...")
+                result = self._generate_debate_and_vote(
+                    agent, debate_proposals, round_1_proposals, primary_proposal, context, debate_session
+                )
+                responses.append({'agent': agent.agent_name, 'response_text': result['debate_text']})
+                votes.append(result['vote'])
+                self._log_message(
+                    debate_session,
+                    speaker=agent.agent_name,
+                    message=f"[VOTE: {result['vote']['vote']}] {result['debate_text']}",
+                    timestamp=datetime.now()
+                )
+                print(f"     Vote: {result['vote']['vote']}")
+
         return {
             'round': 2,
-            'phase': 'CONVERSATIONAL_RESPONSES',
+            'phase': 'DEBATE_AND_VOTE',
+            'primary_proposal': primary_proposal,
             'responses': responses,
+            'votes': votes,
             'timestamp': datetime.now().isoformat()
         }
+
+    def _generate_debate_and_vote(
+        self,
+        agent,
+        debate_proposals: List[Dict],
+        all_proposals: List[Dict],
+        primary_proposal: Dict,
+        context: Dict,
+        debate_session: Dict
+    ) -> Dict:
+        """
+        Single LLM call: agent critiques peers and casts their final vote.
+        """
+        conversation_history = self._build_conversation_context(debate_session)
+        human_question = debate_session.get('human_input', '')
+        human_line = f"\nHUMAN QUESTION: {human_question}\n" if human_question else ""
+
+        proposals_text = "\n\n".join([
+            f"**{p.get('agent')}** proposes: {p.get('action_type')}\n"
+            f"Description: {p.get('description', '')}\n"
+            f"Justification: {p.get('justification', '')}"
+            for p in debate_proposals
+        ])
+
+        question_anchor = (
+            f"THE HUMAN'S QUESTION IS: \"{human_question}\"\n"
+            f"Your debate and vote MUST directly answer this question. "
+            f"Do not drift to unrelated optimizations.\n"
+            if human_question else ""
+        )
+
+        prompt = f"""You are in Round 2 (final round) of a rapid expert debate about a chiller plant decision.
+{self.PLANT_CONFIG}
+{question_anchor}
+CONVERSATION SO FAR (Round 1 proposals):
+{conversation_history}
+
+ALL PROPOSALS ON THE TABLE:
+{proposals_text}
+
+PRIMARY PROPOSAL SELECTED AS MOST RELEVANT TO THE HUMAN'S QUESTION:
+Agent: {primary_proposal.get('agent')}
+Action: {primary_proposal.get('action_type')}
+Description: {primary_proposal.get('description')}
+
+YOUR TASK — complete BOTH parts:
+
+PART 1 — DEBATE (2-3 sentences):
+Respond directly to the human's question from your domain expertise. \
+Comment on the primary proposal and any other proposals where relevant. \
+Reference specific agents by name. Be direct — do NOT introduce unrelated optimizations.
+
+PART 2 — VOTE (required):
+Your vote answers: "Should this proposal be the team's recommended response to the human's question?"
+VOTE: [APPROVE | APPROVE_WITH_CONDITIONS | REJECT | VETO]
+REASONING: [1-2 sentences tied to the human's question and live system data]
+
+Vote meanings:
+  APPROVE — this proposal directly and safely answers the human's question
+  APPROVE_WITH_CONDITIONS — answers the question but requires specific preconditions first
+  REJECT — does NOT answer the question or is unsafe/inadvisable
+  VETO — critical safety / N+1 / compliance violation (domain authority only)
+
+CONSISTENCY RULE: if your debate says the action is unsafe → vote REJECT or VETO, not APPROVE.
+
+Respond now as {agent.agent_name}:"""
+
+        try:
+            message = self.claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=600,
+                system=agent.system_prompt,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            full_text = message.content[0].text
+
+            # Split debate text from vote block
+            vote_split = full_text.upper().find('VOTE:')
+            if vote_split != -1:
+                debate_text = full_text[:vote_split].strip()
+                vote_block = full_text[vote_split:]
+            else:
+                debate_text = full_text.strip()
+                vote_block = full_text
+
+            vote_value = self._parse_vote_from_text(vote_block, agent, primary_proposal)
+
+            vote_entry = {
+                'agent': agent.agent_name,
+                'vote': vote_value,
+                'reasoning': full_text,
+                'reasoning_text': full_text,
+                'confidence': 0.85,
+                'timestamp': datetime.now().isoformat()
+            }
+            return {'debate_text': full_text, 'vote': vote_entry}
+
+        except Exception as e:
+            print(f"     Warning: LLM error in Round 2: {e}")
+            return {
+                'debate_text': "I support the primary proposal based on current system conditions.",
+                'vote': {
+                    'agent': agent.agent_name,
+                    'vote': 'APPROVE',
+                    'reasoning': 'Fallback approval.',
+                    'reasoning_text': 'Fallback approval.',
+                    'confidence': 0.70,
+                    'timestamp': datetime.now().isoformat()
+                }
+            }
     
     def _run_round_3_conversational(
         self,
@@ -925,18 +1015,50 @@ Cast your vote now as {agent.agent_name}:"""
         
         return feedback[-5:]  # Last 5 relevant mentions
     
-    def _identify_primary_proposal(self, proposals: List[Dict]) -> Dict:
-        """Identify primary proposal for voting"""
-        
-        # Filter out monitoring updates
+    def _identify_primary_proposal(self, proposals: List[Dict], human_question: str = '') -> Dict:
+        """
+        Identify the primary proposal most relevant to the human question.
+
+        If a human question is provided, uses LLM to score proposals and pick
+        the one that best answers what was asked.
+        Falls back to the first actionable proposal if no question or LLM fails.
+        """
         action_proposals = [
             p for p in proposals
             if p.get('action_type') not in ['MONITORING_UPDATE', 'ERROR']
         ]
-        
+
         if not action_proposals:
             return proposals[0] if proposals else {}
-        
+
+        if len(action_proposals) == 1 or not human_question:
+            return action_proposals[0]
+
+        # Use LLM to pick the proposal most relevant to the human question
+        try:
+            summaries = "\n".join([
+                f"{i+1}. [{p.get('agent')}] {p.get('action_type')}: {p.get('description', '')}"
+                for i, p in enumerate(action_proposals)
+            ])
+            prompt = (
+                f"A human asked: \"{human_question}\"\n\n"
+                f"The following proposals were made by agents:\n{summaries}\n\n"
+                f"Which proposal number (1-{len(action_proposals)}) best addresses "
+                f"the human's question? Reply with only the number."
+            )
+            response = self.claude_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=5,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            idx = int(response.content[0].text.strip()) - 1
+            if 0 <= idx < len(action_proposals):
+                chosen = action_proposals[idx]
+                print(f"  [PRIMARY] '{chosen.get('action_type')}' by {chosen.get('agent')} (query-matched)")
+                return chosen
+        except Exception as e:
+            print(f"  [PRIMARY] LLM selection failed ({e}), using first proposal")
+
         return action_proposals[0]
     
     def _format_proposal_message(self, proposal: Dict) -> str:

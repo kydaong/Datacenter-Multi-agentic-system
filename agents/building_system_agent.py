@@ -175,38 +175,42 @@ Provide proposals in JSON with:
         
         # Analyze current situation
         analysis = self.analyze_situation(context)
-        
+
+        # Determine if the human question is about chillers/staging (not pumps/towers)
+        human_question = (context.get('human_question') or '').lower()
+        chiller_focused = any(w in human_question for w in [
+            'chiller', 'staging', 'stage', 'offline', 'online', 'shutdown', 'start up',
+            'n+1', 'redundanc', 'capacity'
+        ])
+
         # Prioritize opportunities
         proposals = []
-        
+
         # Opportunity 1: Economizer mode (highest priority)
         if analysis['economizer_opportunity']['viable']:
             proposals.append(self._propose_economizer(analysis))
-        
+
         # Opportunity 2: Pump VFD optimization
+        # Skip as primary proposal if human is asking about chiller staging —
+        # still include as supporting data but don't let it dominate
         pump_savings = analysis['pump_analysis']['potential_savings_kw']
-        if pump_savings > 5.0:
+        if pump_savings > 5.0 and not chiller_focused:
             proposals.append(self._propose_pump_optimization(analysis))
-        
+
         # Opportunity 3: Tower fan optimization
         tower_savings = analysis['tower_analysis']['potential_savings_kw']
         if tower_savings > 3.0:
             proposals.append(self._propose_tower_optimization(analysis))
-        
-        # If no opportunities, return monitoring update
+
+        # If no opportunities (or chiller-focused with no other options), return monitoring update
         if not proposals:
             return self._create_monitoring_update(analysis)
-        
+
         # Return highest-value proposal
         return max(proposals, key=lambda x: x['predicted_savings']['energy_kw'])
     
     def _analyze_pumps(self, cooling_load_kw: float, metrics: Dict) -> Dict:
         """Analyze pump performance and optimization potential using live DB data"""
-
-        # Calculate required CHW flow
-        # Q = Load / (ρ × Cp × ΔT)
-        chw_delta_t = 5.5  # Target
-        required_flow_lps = cooling_load_kw / (4.18 * chw_delta_t)
 
         # Fetch live pump speeds from DB
         pump_rows = self.live_data.get_pump_telemetry()
@@ -225,29 +229,55 @@ Provide proposals in JSON with:
                 'SCHWP-1': 70.0, 'SCHWP-2': 70.0, 'SCHWP-3': 70.0
             }
 
-        # Calculate current power from live speeds
+        # Count running pump types from live data
+        pchwp_running = max(1, sum(1 for k in current_speeds if k.startswith('PCHWP')))
+        schwp_running = max(1, sum(1 for k in current_speeds if k.startswith('SCHWP')))
+
+        # Use live CHW delta-T if available, else use target
+        chw_supply = metrics.get('chw_supply_temp_c') or metrics.get('CHWSupplyTemp')
+        chw_return = metrics.get('chw_return_temp_c') or metrics.get('CHWReturnTemp')
+        if chw_supply and chw_return and chw_return > chw_supply:
+            actual_delta_t = float(chw_return) - float(chw_supply)
+            # Target: push delta-T toward 6°C to reduce flow
+            target_delta_t = max(actual_delta_t, 6.0)
+        else:
+            actual_delta_t = 5.5
+            target_delta_t = 6.0
+
+        # Required flow based on target delta-T (lower = less pumping)
+        required_flow_lps = cooling_load_kw / (4.18 * target_delta_t)
+
+        # Per-pump flow capacity from specs (L/s)
+        pchwp_flow_each = self.pump_specs.get('PCHWP', {}).get('flow_lps', 150)
+        schwp_flow_each = self.pump_specs.get('SCHWP', {}).get('flow_lps', 120)
+
+        # Optimal speeds: match required flow across running pumps
+        optimal_pchwp_speed = min(100, max(50, (required_flow_lps / pchwp_running / pchwp_flow_each) * 100))
+        optimal_schwp_speed = min(100, max(50, (required_flow_lps / schwp_running / schwp_flow_each) * 100))
+
+        # Current power from live speeds
         current_power = 0
         for pump_id, speed in current_speeds.items():
             pump_type = pump_id.split('-')[0]
             rated_power = self.pump_specs.get(pump_type, {}).get('rated_power_kw', 45)
             current_power += rated_power * (speed / 100) ** 3
-        
-        # Optimize speeds based on required flow
-        # Primary pumps: 2 running
-        optimal_pchwp_speed = min(100, max(50, (required_flow_lps / 2 / 150) * 100))
-        
-        # Secondary pumps: 3 running
-        optimal_schwp_speed = min(100, max(50, (required_flow_lps / 3 / 120) * 100))
-        
-        # Calculate optimized power
-        optimized_power = 0
-        optimized_power += 2 * 55 * (optimal_pchwp_speed / 100) ** 3  # PCHWP
-        optimized_power += 3 * 45 * (optimal_schwp_speed / 100) ** 3  # SCHWP
-        
+
+        # Optimised power
+        pchwp_rated = self.pump_specs.get('PCHWP', {}).get('rated_power_kw', 55)
+        schwp_rated = self.pump_specs.get('SCHWP', {}).get('rated_power_kw', 45)
+        optimized_power = (
+            pchwp_running * pchwp_rated * (optimal_pchwp_speed / 100) ** 3
+            + schwp_running * schwp_rated * (optimal_schwp_speed / 100) ** 3
+        )
+
         savings_kw = current_power - optimized_power
-        
+
         return {
             'required_flow_lps': round(required_flow_lps, 1),
+            'actual_delta_t': round(actual_delta_t, 1),
+            'target_delta_t': round(target_delta_t, 1),
+            'pchwp_running': pchwp_running,
+            'schwp_running': schwp_running,
             'current_speeds': current_speeds,
             'optimal_speeds': {
                 'PCHWP': round(optimal_pchwp_speed, 1),
@@ -255,7 +285,7 @@ Provide proposals in JSON with:
             },
             'current_power_kw': round(current_power, 1),
             'optimized_power_kw': round(optimized_power, 1),
-            'potential_savings_kw': round(savings_kw, 1)
+            'potential_savings_kw': round(max(0.0, savings_kw), 1)
         }
     
     def _analyze_towers(self, cooling_load_kw: float, wet_bulb_temp: float, metrics: Dict) -> Dict:
