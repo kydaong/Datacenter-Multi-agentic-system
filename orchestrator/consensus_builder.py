@@ -57,8 +57,12 @@ class ConsensusBuilder:
             Consensus decision with metadata
         """
         
+        # Advisory questions produce a path forward — no vote tallying needed
+        if debate_result.get('question_type') == 'ADVISORY':
+            return self._build_advisory_consensus(debate_result)
+
         print("\n  Analyzing votes...")
-        
+
         # Get final vote (Round 2 — debate + vote combined)
         round_2 = debate_result['rounds'][1]
         votes = round_2['votes']
@@ -149,6 +153,27 @@ class ConsensusBuilder:
         else:
             return 'UNKNOWN_VETO'
     
+    def _build_advisory_consensus(self, debate_result: Dict) -> Dict:
+        """Return a consensus result for advisory questions — synthesized path forward, no votes."""
+        synthesized = debate_result['rounds'][1].get('synthesized_path', '')
+        print("  Advisory consensus — path forward synthesized, no vote required.")
+        return {
+            'decision': {
+                'action_type': 'ADVISORY',
+                'description': synthesized,
+                'justification': 'Strategic planning response — no operational vote required.',
+                'predicted_savings': {},
+                'agent': 'Orchestrator'
+            },
+            'consensus_type': 'ADVISORY',
+            'confidence': 0.90,
+            'support_percentage': 100.0,
+            'votes': [],
+            'all_votes': [],
+            'vetoes': [],
+            'concerns': [],
+        }
+
     def _handle_veto(
         self,
         vetoes: List[Dict],

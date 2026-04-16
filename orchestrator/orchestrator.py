@@ -894,6 +894,7 @@ class Orchestrator:
             'confidence': round(consensus_result['confidence'], 2),
             'consensus_strength': consensus_result['consensus_type'],
             'requires_human_approval': self._requires_human_approval(consensus_result),
+            'question_type': debate_result.get('question_type', 'OPERATIONAL'),
             'answer': None,
             'secondary_options': []
         }
@@ -922,37 +923,42 @@ class Orchestrator:
 
         alt_text = "\n".join(alternatives) if alternatives else "None"
 
-        prompt = f"""You are summarising an expert debate for a datacenter operator.
+        savings = decision.get('predicted_savings', {})
+        savings_parts = []
+        if savings.get('energy_kw'):       savings_parts.append(f"{savings['energy_kw']:.0f} kW saved")
+        if savings.get('cost_sgd'):        savings_parts.append(f"SGD {savings['cost_sgd']:.0f}/hr")
+        if savings.get('pue_improvement'): savings_parts.append(f"PUE −{savings['pue_improvement']:.3f}")
+        savings_line = f"PREDICTED IMPACT: {', '.join(savings_parts)}\n" if savings_parts else ""
+
+        prompt = f"""You are a datacenter operations expert giving a structured, concise answer to an operator.
 
 HUMAN QUESTION: {human_input}
 
-TEAM RECOMMENDATION: {decision.get('action_type')} -- {decision.get('description', '')}
-CONFIDENCE: {round(consensus_result['confidence'] * 100)}%
-CONSENSUS: {consensus_result['consensus_type']}
-
-AGENT VOTES:
+WHAT THE TEAM RECOMMENDS: {decision.get('description', '')}
+{savings_line}AGENT POSITIONS:
 {votes_text}
 
-ALTERNATIVE OPTIONS RAISED:
-{alt_text}
+Respond using ONLY these sections (omit a section if it has nothing useful to say):
 
-Respond in this exact format -- no extra text:
+**Recommendation**
+One sentence. Direct answer to the human's question.
 
-**[One-line direct answer to the human question]**
+**Actions**
+• Each action on one line — what to do and why, with the key number if available
 
-**Recommendation:** [action] -- [single most important reason]
-**Confidence:** {round(consensus_result['confidence'] * 100)}% ({consensus_result['consensus_type']})
+**Impact**
+• Each impact on one line — quantified benefit (energy, cost, PUE, safety); only use numbers from the data above
 
-**Alternatives considered:**
-[bullet each alternative as: * [agent]: [action] -- [one-line reason]; skip if none]
+**Conditions**
+• Any critical precondition or constraint before acting (omit this section if none)
 
-Keep every line brief. Plain English. No filler."""
+Rules: no filler, no invented figures, plain English. Every line must add value."""
 
         try:
             client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=250,
+                max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
             base['answer'] = response.content[0].text.strip()
@@ -1026,9 +1032,12 @@ Keep every line brief. Plain English. No filler."""
                     summary_lines.append(f"  * {agent}: {action}")
             
             elif round_num == 2:
-                votes = round_data.get('votes', [])
-                approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
-                summary_lines.append(f"  * Debate + Votes: {approve_count}/{len(votes)} approved")
+                if round_data.get('phase') == 'ADVISORY_PATH_FORWARD':
+                    summary_lines.append(f"  * Strategic contributions from all agents — path forward synthesised")
+                else:
+                    votes = round_data.get('votes', [])
+                    approve_count = sum(1 for v in votes if v.get('vote') in ['APPROVE', 'APPROVE_WITH_CONDITIONS'])
+                    summary_lines.append(f"  * Debate + Votes: {approve_count}/{len(votes)} approved")
         
         return "\n".join(summary_lines)
     
@@ -1037,7 +1046,7 @@ Keep every line brief. Plain English. No filler."""
         
         action_type = decision.get('action_type')
         
-        if action_type in ['MONITORING_UPDATE', 'VETO_BLOCKED']:
+        if action_type in ['MONITORING_UPDATE', 'VETO_BLOCKED', 'ADVISORY']:
             return None
         
         return {

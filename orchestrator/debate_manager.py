@@ -41,6 +41,10 @@ N+1 REDUNDANCY RULE (correct formula):
     3 chillers [all=2500T],   load 1200T → remaining=1500T >= 1200T ✓ N+1 MAINTAINED
     1 chiller  [C1=1000T],    load 800T  → remaining=0T    < 800T   ✗ N+1 VIOLATED
     2 chillers [C1+C2=2000T], load 1100T → remaining=1000T < 1100T  ✗ N+1 VIOLATED
+
+UNITS RULE (mandatory — no exceptions):
+  All temperatures must be expressed in degrees Celsius (°C) only.
+  Never use Fahrenheit (°F) in any response or recommendation.
 """
 
     def __init__(self, agents: List, stream_callback=None):
@@ -80,12 +84,16 @@ N+1 REDUNDANCY RULE (correct formula):
         # Pull recent memory context to ground the debate
         memory_context = self._fetch_memory_context()
 
+        question_type = 'ADVISORY' if self._is_advisory_question(human_input) else 'OPERATIONAL'
+        print(f"\n  Question type detected: {question_type}")
+
         debate_session = {
             'start_time': datetime.now().isoformat(),
             'context': context,
             'human_input': human_input,
             'memory_context': memory_context,
             'prior_context': prior_context,
+            'question_type': question_type,
             'rounds': [],
             'conversation_log': []
         }
@@ -192,7 +200,6 @@ N+1 REDUNDANCY RULE (correct formula):
         ctx_summary = (
             f"Cooling load: {context.get('cooling_load_kw', 'N/A')} kW | "
             f"IT load: {context.get('it_load_kw', 'N/A')} kW | "
-            f"Wet-bulb: {context.get('wet_bulb_temp', 'N/A')}°C | "
             f"Chillers online: {context.get('chillers_online', 'N/A')} | "
             f"PUE: {context.get('current_pue', 'N/A')}"
         )
@@ -285,6 +292,10 @@ Respond now as {agent.agent_name}:"""
 
         Single LLM call per agent — keeps the debate tight and fast.
         """
+
+        # Advisory/planning questions skip voting — use collaborative strategy round instead
+        if debate_session.get('question_type') == 'ADVISORY':
+            return self._run_round_2_advisory(round_1, context, debate_session)
 
         round_1_proposals = round_1['proposals']
         debate_proposals = [
@@ -454,6 +465,134 @@ Respond now as {agent.agent_name}:"""
                 }
             }
     
+    # ── Advisory / planning question mode ─────────────────────────────────
+
+    def _is_advisory_question(self, human_input: str) -> bool:
+        """Detect strategic/planning questions that don't need a vote."""
+        import re
+        if not human_input:
+            return False
+        text = human_input.lower()
+        patterns = [
+            r'\bhow\s+can\s+(i|we|the\s+\w+)\b',
+            r'\bhow\s+(do|should|would|could)\s+(i|we|the\s+\w+)\b',
+            r'\bwhat\s+(steps?|strateg\w*|actions?|measures?|approach\w*|ways?|options?)\b',
+            r'\bwhat\s+can\s+(i|we)\b',
+            r'\bhow\s+to\s+(achieve|improve|reduce|increase|optimis?e|reach|get\s+to)\b',
+            r'\b(this\s+year|this\s+quarter|long[- ]term|over\s+the\s+next|roadmap|plan\s+for)\b',
+            r'\b(suggestions?\s+for|recommendations?\s+for)\b',
+            r'\bpath\s+forward\b',
+            r'\bstrateg(y|ies)\b',
+        ]
+        return any(re.search(p, text) for p in patterns)
+
+    def _run_round_2_advisory(self, round_1: Dict, context: Dict, debate_session: Dict) -> Dict:
+        """
+        Round 2 for advisory questions — agents contribute domain strategies, no voting.
+        Ends with a synthesized path forward.
+        """
+        self._emit_round_marker(2, "Strategic Contributions")
+        print("  Advisory mode — collecting strategic contributions...")
+
+        responses = []
+        for agent in self.agents:
+            print(f"  → {agent.agent_name} contributing strategy...")
+            contribution = self._generate_advisory_contribution(agent, round_1, context, debate_session)
+            responses.append({'agent': agent.agent_name, 'response_text': contribution})
+            self._log_message(debate_session, speaker=agent.agent_name,
+                              message=contribution, timestamp=datetime.now())
+
+        print("  → Synthesizing path forward...")
+        synthesized = self._synthesize_advisory_path(
+            debate_session.get('human_input', ''), responses, context, debate_session
+        )
+
+        return {
+            'round': 2,
+            'phase': 'ADVISORY_PATH_FORWARD',
+            'primary_proposal': {},
+            'responses': responses,
+            'votes': [],
+            'synthesized_path': synthesized,
+            'timestamp': datetime.now().isoformat()
+        }
+
+    def _generate_advisory_contribution(self, agent, round_1: Dict, context: Dict, debate_session: Dict) -> str:
+        """Each agent contributes domain-specific strategies — no vote prompt."""
+        human_question = debate_session.get('human_input', '')
+        memory_context = debate_session.get('memory_context', '')
+        conversation_history = self._build_conversation_context(debate_session)
+        ctx_summary = (
+            f"Cooling load: {context.get('cooling_load_kw','N/A')} kW | "
+            f"IT load: {context.get('it_load_kw','N/A')} kW | "
+            f"PUE: {context.get('current_pue','N/A')} | "
+            f"Chillers online: {context.get('chillers_online','N/A')}"
+        )
+        memory_line = f"\nRECENT CONTEXT:\n{memory_context}\n" if memory_context else ""
+
+        prompt = f"""You are {agent.agent_name} in a strategic planning session.
+
+HUMAN QUESTION: {human_question}
+
+LIVE SYSTEM STATE:
+{ctx_summary}
+{memory_line}
+{self.PLANT_CONFIG}
+ROUND 1 — COLLEAGUES' PROPOSALS:
+{conversation_history}
+
+YOUR TASK:
+Contribute 2-3 specific strategies from your domain ({agent.agent_role}) that help answer the \
+human's question. Build on colleagues' ideas — don't repeat what they covered. Use actual numbers \
+where possible. Do NOT vote or approve/reject — this is a planning discussion.
+
+2-4 sentences. Respond as {agent.agent_name}:"""
+
+        try:
+            message = self.claude_client.messages.create(
+                model=self.claude_model, max_tokens=400,
+                system=agent.system_prompt,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text
+        except Exception as e:
+            print(f"     Warning: advisory contribution error: {e}")
+            return f"From a {agent.agent_role} perspective, targeted optimisation of current operating parameters can contribute meaningfully toward the goal."
+
+    def _synthesize_advisory_path(self, human_question: str, responses: List[Dict],
+                                   context: Dict, debate_session: Dict) -> str:
+        """Synthesize all agent contributions into a structured path forward."""
+        contributions = "\n\n".join([f"{r['agent']}:\n{r['response_text']}" for r in responses])
+        memory_line = f"\nRECENT CONTEXT:\n{debate_session.get('memory_context','')}\n" \
+            if debate_session.get('memory_context') else ""
+
+        prompt = f"""You are the Orchestrator synthesising a multi-agent planning session.
+
+HUMAN QUESTION: {human_question}
+
+AGENT CONTRIBUTIONS:
+{contributions}
+{memory_line}
+Write a concise answer (4-6 bullet points) that:
+1. Opens with the single highest-impact action and its quantified benefit
+2. Lists the next 2-4 most valuable steps in priority order, each with expected outcome
+3. Closes with the realistic overall result if the steps are followed
+
+Rules: only use numbers from the agent contributions — never invent figures. \
+No boilerplate headers. Every bullet must add value. Plain English."""
+
+        try:
+            message = self.claude_client.messages.create(
+                model=self.claude_model, max_tokens=500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text
+        except Exception as e:
+            print(f"     Warning: advisory synthesis error: {e}")
+            return "\n".join([r['response_text'] for r in responses])
+
+    # ── End advisory mode ──────────────────────────────────────────────────
+
     def _run_round_3_conversational(
         self,
         round_1: Dict,

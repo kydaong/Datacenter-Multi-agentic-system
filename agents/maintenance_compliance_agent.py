@@ -78,7 +78,6 @@ class MaintenanceComplianceAgent(BaseAgent):
             'pue_reporting_frequency_months': 3,
             'pue_limit_new_dc': 1.30,
             'pue_limit_existing_dc': 1.40,
-            'free_cooling_mandatory_wb_threshold_c': 22.0,
             'min_chiller_iplv_kw_per_ton': 0.50,
             'data_logging_interval_minutes': 15,
             'measurement_accuracy_percent': 2.0
@@ -120,7 +119,6 @@ Equipment health assessment:
 
 Compliance verification:
 - NEA PUE limits (≤1.30 new, ≤1.40 existing)
-- Free cooling requirement (wet-bulb <22°C)
 - Quarterly reporting requirements
 - Data logging and accuracy requirements
 
@@ -331,30 +329,7 @@ Provide maintenance/compliance status in JSON with:
         if not pue_compliant:
             all_compliant = False
         
-        # Check 2: Free cooling requirement
-        wet_bulb = context.get('wet_bulb_temp', 25.0)
-        economizer_enabled = context.get('economizer_enabled', False)
-        free_cooling_threshold = self.compliance_requirements['free_cooling_mandatory_wb_threshold_c']
-        
-        if wet_bulb < free_cooling_threshold:
-            free_cooling_compliant = economizer_enabled
-            compliance_checks['free_cooling'] = {
-                'compliant': free_cooling_compliant,
-                'wet_bulb_temp': wet_bulb,
-                'threshold': free_cooling_threshold,
-                'economizer_enabled': economizer_enabled,
-                'requirement': f'Mandatory free cooling when wet-bulb < {free_cooling_threshold}°C'
-            }
-            
-            if not free_cooling_compliant:
-                all_compliant = False
-        else:
-            compliance_checks['free_cooling'] = {
-                'compliant': True,
-                'requirement': 'Not applicable (wet-bulb above threshold)'
-            }
-        
-        # Check 3: Data logging
+        # Check 2: Data logging
         data_logging_compliant = True  # Assume compliant (would check actual logging)
         compliance_checks['data_logging'] = {
             'compliant': data_logging_compliant,
