@@ -958,7 +958,7 @@ Rules: no filler, no invented figures, plain English. Every line must add value.
             client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=500,
+                max_tokens=750,
                 messages=[{"role": "user", "content": prompt}]
             )
             base['answer'] = response.content[0].text.strip()

@@ -268,11 +268,11 @@ Respond now as {agent.agent_name}:"""
         try:
             message = self.claude_client.messages.create(
                 model=self.claude_model,
-                max_tokens=400,
+                max_tokens=700,
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
-            return message.content[0].text
+            return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: LLM error in Round 1 message: {e}")
             return self._format_proposal_message(proposal)
@@ -428,7 +428,7 @@ Respond now as {agent.agent_name}:"""
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
-            full_text = message.content[0].text
+            full_text = self._strip_code_blocks(message.content[0].text)
 
             # Split debate text from vote block
             vote_split = full_text.upper().find('VOTE:')
@@ -550,11 +550,11 @@ where possible. Do NOT vote or approve/reject — this is a planning discussion.
 
         try:
             message = self.claude_client.messages.create(
-                model=self.claude_model, max_tokens=400,
+                model=self.claude_model, max_tokens=600,
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
-            return message.content[0].text
+            return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: advisory contribution error: {e}")
             return f"From a {agent.agent_role} perspective, targeted optimisation of current operating parameters can contribute meaningfully toward the goal."
@@ -583,10 +583,10 @@ No boilerplate headers. Every bullet must add value. Plain English."""
 
         try:
             message = self.claude_client.messages.create(
-                model=self.claude_model, max_tokens=500,
+                model=self.claude_model, max_tokens=900,
                 messages=[{"role": "user", "content": prompt}]
             )
-            return message.content[0].text
+            return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: advisory synthesis error: {e}")
             return "\n".join([r['response_text'] for r in responses])
@@ -1200,6 +1200,11 @@ Cast your vote now as {agent.agent_name}:"""
 
         return action_proposals[0]
     
+    def _strip_code_blocks(self, text: str) -> str:
+        """Remove markdown code blocks (```...```) from LLM output."""
+        import re
+        return re.sub(r'```[\w]*\n[\s\S]*?```', '', text).strip()
+
     def _format_proposal_message(self, proposal: Dict) -> str:
         """Format proposal as human-readable message"""
         
