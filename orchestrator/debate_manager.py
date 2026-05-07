@@ -15,6 +15,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _record_tokens(model: str, response) -> None:
+    """Record API token usage to MLflow tracker if a session is active."""
+    try:
+        from .mlflow_tracker import tracker
+        if hasattr(response, "usage") and tracker.is_active():
+            tracker.record_api_call(model, response.usage.input_tokens, response.usage.output_tokens)
+    except Exception:
+        pass
+
+
 class DebateManager:
     """
     Manages structured 2-round debate protocol with natural conversations
@@ -272,6 +282,7 @@ Respond now as {agent.agent_name}:"""
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens(self.claude_model, message)
             return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: LLM error in Round 1 message: {e}")
@@ -428,6 +439,7 @@ Respond now as {agent.agent_name}:"""
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens(self.claude_model, message)
             full_text = self._strip_code_blocks(message.content[0].text)
 
             # Split debate text from vote block
@@ -554,6 +566,7 @@ where possible. Do NOT vote or approve/reject — this is a planning discussion.
                 system=agent.system_prompt,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens(self.claude_model, message)
             return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: advisory contribution error: {e}")
@@ -586,6 +599,7 @@ No boilerplate headers. Every bullet must add value. Plain English."""
                 model=self.claude_model, max_tokens=900,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens(self.claude_model, message)
             return self._strip_code_blocks(message.content[0].text)
         except Exception as e:
             print(f"     Warning: advisory synthesis error: {e}")
@@ -738,7 +752,7 @@ No boilerplate headers. Every bullet must add value. Plain English."""
                     }
                 ]
             )
-            
+            _record_tokens(self.claude_model, message)
             response_text = message.content[0].text
             
             return {
@@ -808,7 +822,7 @@ No boilerplate headers. Every bullet must add value. Plain English."""
                     }
                 ]
             )
-            
+            _record_tokens(self.claude_model, message)
             response_text = message.content[0].text
             
             # Determine if position changed
@@ -868,7 +882,7 @@ No boilerplate headers. Every bullet must add value. Plain English."""
                     }
                 ]
             )
-            
+            _record_tokens(self.claude_model, message)
             response_text = message.content[0].text
             
             # Parse vote from response
@@ -1190,6 +1204,7 @@ Cast your vote now as {agent.agent_name}:"""
                 max_tokens=5,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens("claude-haiku-4-5-20251001", response)
             idx = int(response.content[0].text.strip()) - 1
             if 0 <= idx < len(action_proposals):
                 chosen = action_proposals[idx]

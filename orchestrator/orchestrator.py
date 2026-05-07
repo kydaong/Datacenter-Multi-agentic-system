@@ -34,6 +34,23 @@ from .learning_tracker import LearningTracker
 from .live_data import live_data
 from .qdrant_interface import qdrant
 
+try:
+    from .mlflow_tracker import tracker as _mlflow_tracker
+except Exception:
+    _mlflow_tracker = None
+
+
+def _record_tokens(model: str, response) -> None:
+    """Record API token usage to MLflow if a session is active."""
+    try:
+        if _mlflow_tracker and hasattr(response, "usage") and _mlflow_tracker.is_active():
+            _mlflow_tracker.record_api_call(
+                model, response.usage.input_tokens, response.usage.output_tokens
+            )
+    except Exception:
+        pass
+
+
 # Document-type keywords -- trigger knowledge retrieval ONLY when paired with an info verb
 _DOC_KEYWORDS = [
     r'\bsop\b', r'\bstandard\s+operating', r'\bmanual\b', r'\bregulation',
@@ -180,6 +197,9 @@ class Orchestrator:
         
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        if _mlflow_tracker:
+            _mlflow_tracker.start_session(session_id, tags={"query_intent": "DEBATE"})
+
         print("\n" + "="*70)
         print(f"NEW ANALYSIS SESSION: {session_id}")
         print("="*70)
@@ -253,7 +273,24 @@ class Orchestrator:
         print("\n" + "="*70)
         print("✅ DECISION READY FOR HUMAN REVIEW")
         print("="*70)
-        
+
+        if _mlflow_tracker:
+            _mlflow_tracker.end_session(
+                params={
+                    "session_id": session_id,
+                    "question_type": debate_result.get("question_type", "OPERATIONAL"),
+                    "query_intent": "DEBATE",
+                    "is_nudge": "False",
+                    "human_input": (human_input or "")[:500],
+                },
+                metrics={
+                    "confidence": consensus_result.get("confidence", 0.0),
+                    "support_pct": consensus_result.get("support_percentage", 0.0),
+                    "debate_rounds": float(len(debate_result.get("rounds", []))),
+                    "veto_count": float(len(consensus_result.get("vetoes", []))),
+                },
+            )
+
         return human_decision_package
     
     def handle_human_nudge(
@@ -308,7 +345,13 @@ class Orchestrator:
         
         # Log nudge session
         nudge_session_id = f"{session_id}_NUDGE_{datetime.now().strftime('%H%M%S')}"
-        
+
+        if _mlflow_tracker:
+            _mlflow_tracker.start_session(
+                nudge_session_id,
+                tags={"query_intent": "DEBATE", "is_nudge": "True"},
+            )
+
         self.decision_logger.log_session(
             session_id=nudge_session_id,
             context=nudged_context,
@@ -330,7 +373,25 @@ class Orchestrator:
         print("\n" + "="*70)
         print("✅ ALTERNATIVE SOLUTION READY")
         print("="*70)
-        
+
+        if _mlflow_tracker:
+            _mlflow_tracker.end_session(
+                params={
+                    "session_id": nudge_session_id,
+                    "original_session_id": session_id,
+                    "question_type": "OPERATIONAL",
+                    "query_intent": "DEBATE",
+                    "is_nudge": "True",
+                    "nudge_feedback": nudge_feedback[:500],
+                },
+                metrics={
+                    "confidence": consensus_result.get("confidence", 0.0),
+                    "support_pct": consensus_result.get("support_percentage", 0.0),
+                    "debate_rounds": float(len(debate_result.get("rounds", []))),
+                    "veto_count": float(len(consensus_result.get("vetoes", []))),
+                },
+            )
+
         return human_decision_package
     
     def handle_human_approval(
@@ -961,6 +1022,7 @@ Rules: no filler, no invented figures, plain English. Every line must add value.
                 max_tokens=750,
                 messages=[{"role": "user", "content": prompt}]
             )
+            _record_tokens("claude-haiku-4-5-20251001", response)
             base['answer'] = response.content[0].text.strip()
         except Exception as e:
             print(f"  [SUMMARY] LLM synthesis failed ({e}), using raw description")
@@ -1197,6 +1259,7 @@ Rules: no filler, no invented figures, plain English. Every line must add value.
                 ),
                 messages=[{"role": "user", "content": human_input}]
             )
+            _record_tokens("claude-haiku-4-5-20251001", response)
             intent = response.content[0].text.strip().upper()
             if intent not in ('FETCH_DOCS', 'DEBATE'):
                 intent = 'DEBATE'
@@ -1234,6 +1297,11 @@ Rules: no filler, no invented figures, plain English. Every line must add value.
             }
         """
         print(f"\n[FETCH_DOCS] Knowledge-base lookup: '{query}'")
+
+        fetch_session_id = f"fetch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if _mlflow_tracker:
+            _mlflow_tracker.start_session(fetch_session_id, tags={"query_intent": "FETCH_DOCS"})
+
         results = []
 
         collection_searches = [
@@ -1327,11 +1395,22 @@ Rules: no filler, no invented figures, plain English. Every line must add value.
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_message}]
                 )
+                _record_tokens("claude-haiku-4-5-20251001", response)
                 summary = response.content[0].text
                 print(f"  ✅ Grounded summary generated ({len(summary)} chars)")
             except Exception as exc:
                 print(f"  ⚠️  Summary generation failed: {exc}")
                 summary = None
+
+        if _mlflow_tracker:
+            _mlflow_tracker.end_session(
+                params={
+                    "session_id": fetch_session_id,
+                    "query": query[:500],
+                    "query_intent": "FETCH_DOCS",
+                },
+                metrics={"results_found": float(len(results))},
+            )
 
         return {
             'query': query,
