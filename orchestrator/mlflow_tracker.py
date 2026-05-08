@@ -1,16 +1,8 @@
 """
 MLflow Tracker — Orchestrator Decision Logging & API Cost Tracking
 
-Tracks two things per session:
-  1. Decision metrics (confidence, consensus, debate rounds, vote breakdown)
-  2. Anthropic API usage (input/output tokens per model → USD cost)
-
-Usage pattern:
-  tracker.start_session(session_id)          # at start of analyze_and_propose
-  tracker.record_api_call(model, in, out)    # after every messages.create()
-  tracker.end_session(params={}, metrics={}) # before returning to caller
-
-Falls back to a no-op if MLflow is not installed or the server is unreachable.
+Uses MLflow's Tracing API (start_span) so sessions appear under the
+GenAI / Traces section with Token Usage and Cost Breakdown panels.
 """
 
 import os
@@ -34,7 +26,8 @@ class MLflowTracker:
         experiment_name: str = "orchestrator-decisions",
     ):
         self._mlflow = None
-        self._run = None
+        self._span = None
+        self._span_ctx = None
         self._token_totals: Dict[str, Dict[str, int]] = {}
         self._call_counts: Dict[str, int] = {}
 
@@ -43,14 +36,14 @@ class MLflowTracker:
             mlflow.set_tracking_uri(tracking_uri)
             mlflow.set_experiment(experiment_name)
             self._mlflow = mlflow
-            logger.info("MLflow tracking enabled at %s", tracking_uri)
+            print(f"[MLflow] Enabled at {tracking_uri}", flush=True)
         except Exception as exc:
-            logger.warning("MLflow unavailable, tracking disabled: %s", exc)
+            print(f"[MLflow] INIT FAILED: {exc}", flush=True)
 
     # ── Public API ──────────────────────────────────────────────────────────
 
     def is_active(self) -> bool:
-        return self._mlflow is not None and self._run is not None
+        return self._mlflow is not None and self._span is not None
 
     def start_session(self, session_id: str, tags: Optional[Dict[str, str]] = None) -> None:
         if self._mlflow is None:
@@ -58,10 +51,17 @@ class MLflowTracker:
         try:
             self._token_totals = {}
             self._call_counts = {}
-            self._run = self._mlflow.start_run(run_name=session_id, tags=tags or {})
+            self._span_ctx = self._mlflow.start_span(
+                name=session_id,
+                span_type="AGENT",
+                attributes=tags or {},
+            )
+            self._span = self._span_ctx.__enter__()
+            print(f"[MLflow] Trace started: {session_id}", flush=True)
         except Exception as exc:
-            logger.warning("MLflow start_run failed: %s", exc)
-            self._run = None
+            print(f"[MLflow] START_SPAN FAILED: {exc}", flush=True)
+            self._span = None
+            self._span_ctx = None
 
     def record_api_call(self, model: str, input_tokens: int, output_tokens: int) -> None:
         if not self.is_active():
@@ -82,36 +82,44 @@ class MLflowTracker:
             return
         try:
             if params:
-                self._mlflow.log_params({k: str(v)[:500] for k, v in params.items()})
-            if metrics:
-                self._mlflow.log_metrics(metrics)
-            self._log_token_costs()
-            self._mlflow.end_run()
+                self._span.set_inputs({k: str(v)[:500] for k, v in params.items()})
+
+            total_input, total_output, total_cost = 0, 0, 0.0
+            for model, tokens in self._token_totals.items():
+                short = model.replace("claude-", "").replace("-", "_")
+                pricing = _MODEL_PRICING.get(model, {"input": 0.0, "output": 0.0})
+                cost = (
+                    tokens["input"] * pricing["input"]
+                    + tokens["output"] * pricing["output"]
+                ) / 1_000_000
+                total_input  += tokens["input"]
+                total_output += tokens["output"]
+                total_cost   += cost
+                self._span.set_attribute(f"llm.token_count.prompt.{short}",     tokens["input"])
+                self._span.set_attribute(f"llm.token_count.completion.{short}",  tokens["output"])
+                self._span.set_attribute(f"api_calls.{short}",                   float(self._call_counts[model]))
+                self._span.set_attribute(f"cost_usd.{short}",                    round(cost, 6))
+
+            self._span.set_attribute("llm.token_count.prompt",      total_input)
+            self._span.set_attribute("llm.token_count.completion",   total_output)
+            self._span.set_attribute("llm.token_count.total",        total_input + total_output)
+            self._span.set_attribute("total_cost_usd",               round(total_cost, 6))
+
+            outputs = {k: str(v) for k, v in (metrics or {}).items()}
+            outputs["total_cost_usd"] = str(round(total_cost, 6))
+            self._span.set_outputs(outputs)
+
+            self._span_ctx.__exit__(None, None, None)
+            print(f"[MLflow] Trace ended — tokens: {total_input}in/{total_output}out  cost: ${total_cost:.4f}", flush=True)
         except Exception as exc:
-            logger.warning("MLflow end_session failed: %s", exc)
+            print(f"[MLflow] END_SPAN FAILED: {exc}", flush=True)
+            try:
+                self._span_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
         finally:
-            self._run = None
-
-    # ── Private helpers ─────────────────────────────────────────────────────
-
-    def _log_token_costs(self) -> None:
-        total_cost = 0.0
-        for model, tokens in self._token_totals.items():
-            # Shorten model name to a valid MLflow metric key
-            short = model.replace("claude-", "").replace("-", "_")
-            pricing = _MODEL_PRICING.get(model, {"input": 0.0, "output": 0.0})
-            cost = (
-                tokens["input"] * pricing["input"]
-                + tokens["output"] * pricing["output"]
-            ) / 1_000_000
-            self._mlflow.log_metrics({
-                f"tokens_input_{short}":  tokens["input"],
-                f"tokens_output_{short}": tokens["output"],
-                f"api_calls_{short}":     float(self._call_counts[model]),
-                f"cost_usd_{short}":      round(cost, 6),
-            })
-            total_cost += cost
-        self._mlflow.log_metric("total_cost_usd", round(total_cost, 6))
+            self._span = None
+            self._span_ctx = None
 
 
 def record_tokens(model: str, response) -> None:
