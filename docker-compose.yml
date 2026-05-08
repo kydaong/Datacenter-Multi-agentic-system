@@ -6,12 +6,12 @@ services:
       dockerfile: Dockerfile.backend
     env_file: .env
     environment:
-      QDRANT_HOST: qdrant
+      QDRANT_HOST: host.docker.internal
       QDRANT_PORT: 6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - mlflow-data:/app/mlruns
-    depends_on:
-      - qdrant
     networks:
       - app-net
     restart: unless-stopped
@@ -21,19 +21,9 @@ services:
       context: ./mags-ui-vite
       dockerfile: Dockerfile.frontend
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - backend
-    networks:
-      - app-net
-    restart: unless-stopped
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
-    volumes:
-      - qdrant-data:/qdrant/storage
     networks:
       - app-net
     restart: unless-stopped
@@ -42,5 +32,4 @@ networks:
   app-net:
 
 volumes:
-  qdrant-data:
   mlflow-data:
