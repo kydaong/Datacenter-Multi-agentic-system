@@ -8,6 +8,7 @@ services:
     environment:
       QDRANT_HOST: host.docker.internal
       QDRANT_PORT: 6333
+      MLFLOW_TRACKING_URI: sqlite:////app/mlruns/mlruns.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -20,6 +21,8 @@ services:
     build:
       context: ./mags-ui-vite
       dockerfile: Dockerfile.frontend
+    environment:
+      BACKEND_URL: http://backend:8000
     ports:
       - "8080:80"
     depends_on:
