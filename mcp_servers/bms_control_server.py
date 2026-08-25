@@ -348,9 +348,9 @@ class BMSControlServer:
         """
         
         try:
-            conn = pyodbc.connect(self.conn_str)
+            conn = pyodbc.connect(self.conn_str, timeout=5)
             cursor = conn.cursor()
-            
+
             # Insert into control log table (would need to create this table)
             # For now, just print
             print(f"[BMS LOG] {equipment_id} - {action} - {approved_by} - {result['success']}")
@@ -389,9 +389,9 @@ class BMSControlServer:
         # For development, query database
         
         try:
-            conn = pyodbc.connect(self.conn_str)
+            conn = pyodbc.connect(self.conn_str, timeout=5)
             cursor = conn.cursor()
-            
+
             equipment_type = self._get_equipment_type(equipment_id)
             
             if equipment_type == 'chiller':

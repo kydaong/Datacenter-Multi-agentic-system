@@ -49,7 +49,7 @@ class LiveDataFetcher:
         self.connection_string = connection_string
 
     def _get_connection(self):
-        return pyodbc.connect(self.connection_string)
+        return pyodbc.connect(self.connection_string, timeout=5)
 
     def get_current_context(self) -> Dict:
         """

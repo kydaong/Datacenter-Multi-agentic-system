@@ -17,7 +17,7 @@ class ChunkingStrategy(ABC):
 
 
 class TokenBasedChunking(ChunkingStrategy):
-    """
+    """ 
     Token-based chunking with overlap
     Best for general documents
     """
@@ -46,7 +46,7 @@ class TokenBasedChunking(ChunkingStrategy):
         while start < len(tokens):
             # Get chunk
             end = min(start + self.chunk_size, len(tokens))
-            chunk_tokens = tokens[start:end]
+            chunk_tokens = tokens[start:end] 
             
             # Decode to text
             chunk_text = self.tokenizer.decode(chunk_tokens)

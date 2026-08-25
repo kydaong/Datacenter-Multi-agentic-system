@@ -69,7 +69,7 @@ class LearningTracker:
     
     def _get_connection(self):
         """Get database connection"""
-        return pyodbc.connect(self.connection_string)
+        return pyodbc.connect(self.connection_string, timeout=5)
     
     def _create_tables_if_not_exist(self):
         """Create learning tracker tables"""

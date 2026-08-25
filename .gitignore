@@ -97,13 +97,11 @@ Thumbs.db
 desktop.ini
 *.csv
 *.pdf
-*.js
 *.png
 *.json
 *.txt
 *.ttf
 *.svg
-*.css
 *.ico
 ## react modules gitignore
 # Byte-compiled / optimized / DLL files
@@ -375,7 +373,6 @@ $RECYCLE.BIN/
 # Linux
 .directory
 .Trash-*
-*.jsx
 
 
 

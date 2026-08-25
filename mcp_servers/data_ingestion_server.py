@@ -332,9 +332,9 @@ class DataIngestionServer:
         
         # Insert to database
         try:
-            conn = pyodbc.connect(self.conn_str)
+            conn = pyodbc.connect(self.conn_str, timeout=5)
             cursor = conn.cursor()
-            
+
             # Choose insert query based on buffer type
             if buffer_name == 'chiller_telemetry':
                 result = self._insert_chiller_telemetry(cursor, batch)
